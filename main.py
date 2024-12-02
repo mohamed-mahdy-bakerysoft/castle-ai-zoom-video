@@ -16,7 +16,9 @@ from asr import get_client_settings, transcribe_audio
 import json
 from predictor import ClaudeAdapter
 from zoom_effect import ZoomEffect, process_video
+from dotenv import load_dotenv, find_dotenv
 
+_ = load_dotenv(find_dotenv())
 
 SPLIT_SENTENCE_BY_DURATION = 240 * 7
 
@@ -256,8 +258,8 @@ def main():
 
         if st.button("Claude Predictions"):
             st.session_state.button_clicked = "claude_predictions"
-            predictor = ClaudeAdapter(model="claude-3-5-sonnet-20241022", 
-                                    api_key=os.get_env("ANTHROPIC_API_KEY"))
+            predictor = ClaudeAdapter(model_name="claude-3-5-sonnet-20241022", 
+                                    api_key=os.getenv('ANTHROPIC_API_KEY'))
 
             os.makedirs("claude_results", exist_ok=True)
             st.session_state.sentences_splitted_by_duration = split_sentences_by_seconds(new_sentences, SPLIT_SENTENCE_BY_DURATION)
@@ -281,27 +283,27 @@ def main():
         output_path = None
         if st.session_state.predictions:
 
-            col1, col2= st.columns(2)
+            [col1]= st.columns(1)
 
+            # with col1:
+            #     if st.button("Fast Zoom In-Cut"):
+            #         st.session_state.button_clicked = "fast_zoom_cut"
             with col1:
-                if st.button("Fast Zoom In-Cut"):
-                    st.session_state.button_clicked = "fast_zoom_cut"
-            with col2:
                 if st.button("Fast Zoom In-Hold-Cut"):
                     st.session_state.button_clicked = "fast_zoom_hold_cut"
             
         # Handle the action after the button click
-        if st.session_state.button_clicked == "fast_zoom_cut":
-            st.write("Slow Zoom In-Cut clicked!")
-            try:
-                with st.spinner("Processing video..."):
-                    st.session_state.zoom_effects = get_zooms_claude(st.session_state.predictions, st.session_state.sentences_splitted_by_duration, st.session_state.splitted_words, slow=False, jumpcut=True, hold=False)
-                    st.session_state.output_path = process_video(video_path, st.session_state.zoom_effects)
-                    st.session_state.button_clicked = None
+        # if st.session_state.button_clicked == "fast_zoom_cut":
+        #     st.write("Slow Zoom In-Cut clicked!")
+        #     try:
+        #         with st.spinner("Processing video..."):
+        #             st.session_state.zoom_effects = get_zooms_claude(st.session_state.predictions, st.session_state.sentences_splitted_by_duration, st.session_state.splitted_words, slow=False, jumpcut=True, hold=False)
+        #             st.session_state.output_path = process_video(video_path, st.session_state.zoom_effects)
+        #             st.session_state.button_clicked = None
 
-            except Exception as e:
-                st.error(f"An error occurred during processing: {str(e)}")
-        elif st.session_state.button_clicked == "fast_zoom_hold_cut":
+        #     except Exception as e:
+        #         st.error(f"An error occurred during processing: {str(e)}")
+        if st.session_state.button_clicked == "fast_zoom_hold_cut":
             st.write("Fast Zoom In-Hold-Cut clicked!")
             try:
                 with st.spinner("Processing video..."):

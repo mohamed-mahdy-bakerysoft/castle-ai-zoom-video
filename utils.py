@@ -8,6 +8,9 @@ import re
 from emphassess.src.emphasis_classifier.utils.infer_utils import infer_audio, Wav2Vec2ForAudioFrameClassification
 import torchaudio as ta
 from tqdm import tqdm
+from glob import glob
+from span_api_splitter.utils import get_split_info
+from span_api_splitter import config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,7 +60,48 @@ def check_ffmpeg():
     except FileNotFoundError:
         return False
 
-def extract_sentences_with_durations(transcript_metadata: dict) -> List[str]:
+# def extract_sentences_with_durations(transcript_metadata: dict) -> List[str]:
+#     """
+#     Extracts sentences with their start and end times from the transcript metadata.
+
+#     Args:
+#         transcript_metadata (dict): The transcript metadata.
+
+#     Returns:
+#         list: Sentence concated with it's start and end times.
+#     """
+#     sentences_with_durations = []
+#     transcripts_with_alignments = transcript_metadata.get("results", [])
+#     sentence = ""
+#     sentence_with_words = []
+#     for transcript in transcripts_with_alignments:
+#         word = transcript["alternatives"][0]["content"]
+
+#         if sentence == "":
+#             sentence_with_words.append([])
+#             start_time_sentence = transcript["start_time"]
+#             start_time = transcript["start_time"]
+#             end_time = transcript["end_time"]
+#             sentence += word + " "
+#             sentence_with_words[-1].append([word, start_time, end_time])
+#         elif transcript.get("is_eos", False):  # End of sentence
+#             start_time = transcript["start_time"]
+#             end_time = transcript["end_time"]
+#             sentence = sentence.strip() + word + " "
+#             sentences_with_durations.append(f'{sentence}|{start_time_sentence}|{end_time}\n')
+#             # sentence_with_words[-1].append([word, start_time, end_time])
+#             sentence = ""
+#         elif transcript["type"] == 'punctuation':
+#             sentence = sentence.strip() + word + " "
+#         else:
+#             start_time = transcript["start_time"]
+#             end_time = transcript["end_time"]
+#             sentence_with_words[-1].append([word, start_time, end_time])
+#             sentence += word + " "
+
+#     return sentences_with_durations, sentence_with_words
+
+def extract_sentences_with_durations_with_chunks(transcript_metadata: dict, chunk_start:float = None) -> List[str]:
     """
     Extracts sentences with their start and end times from the transcript metadata.
 
@@ -69,35 +113,6 @@ def extract_sentences_with_durations(transcript_metadata: dict) -> List[str]:
     """
     sentences_with_durations = []
     transcripts_with_alignments = transcript_metadata.get("results", [])
-
-    # sentence = ""
-    # sentence_with_words = []
-    # sentence_with_words.append([])
-    # for transcript in transcripts_with_alignments:
-    #     word = transcript["alternatives"][0]["content"]
-
-        # if sentence == "":
-        #     start_time = transcript["start_time"]
-        #     end_time = transcript["end_time"]
-        #     sentence += word + " "
-        #     sentence_with_words[-1].append([word, start_time, end_time])
-        # elif transcript.get("is_eos", False):  # End of sentence
-        #     start_time = transcript["start_time"]
-        #     end_time = transcript["end_time"]
-        #     sentence = sentence.strip() + word + " "
-        #     sentences_with_durations.append(f'{sentence}|{start_time}|{end_time}\n')
-        #     sentence_with_words[-1].append([word, start_time, end_time])
-        #     sentence_with_words.append([])
-        #     sentence = ""
-        # elif transcript["type"] == 'punctuation':
-        #     sentence = sentence.strip() + word + " "
-        # else:
-        #     start_time = transcript["start_time"]
-        #     end_time = transcript["end_time"]
-        #     sentence_with_words[-1].append([word, start_time, end_time])
-
-        #     sentence += word + " "
-
     sentence = ""
     sentence_with_words = []
     for transcript in transcripts_with_alignments:
@@ -109,12 +124,18 @@ def extract_sentences_with_durations(transcript_metadata: dict) -> List[str]:
             start_time = transcript["start_time"]
             end_time = transcript["end_time"]
             sentence += word + " "
-            sentence_with_words[-1].append([word, start_time, end_time])
+            sentence_with_words[-1].append([word, start_time + chunk_start, end_time + chunk_start])
         elif transcript.get("is_eos", False):  # End of sentence
             start_time = transcript["start_time"]
             end_time = transcript["end_time"]
             sentence = sentence.strip() + word + " "
-            sentences_with_durations.append(f'{sentence}|{start_time_sentence}|{end_time}\n')
+            sentences_with_durations.append(
+                {
+                    "sentence": sentence,
+                    "start_time": start_time_sentence + chunk_start,
+                    "end_time": end_time + chunk_start
+                }
+            )
             # sentence_with_words[-1].append([word, start_time, end_time])
             sentence = ""
         elif transcript["type"] == 'punctuation':
@@ -122,7 +143,7 @@ def extract_sentences_with_durations(transcript_metadata: dict) -> List[str]:
         else:
             start_time = transcript["start_time"]
             end_time = transcript["end_time"]
-            sentence_with_words[-1].append([word, start_time, end_time])
+            sentence_with_words[-1].append([word, start_time + chunk_start, end_time + chunk_start])
             sentence += word + " "
 
     return sentences_with_durations, sentence_with_words
@@ -146,41 +167,40 @@ def split_sentences_by_seconds(sentences_metadata: dict, seconds: int) -> List[s
             sentences[-1].append(sentence)
             if extracted_number//seconds > vrk:
                 vrk += 1
-                
                 sentences.append([])
         else:
             print("No number found after sentence")
 
     return sentences
 
-def extract_words_with_durations(transcript_metadata: dict) -> List[str]:
-    """
-    Extracts sentences with their start and end times from the transcript metadata.
+# def extract_words_with_durations(transcript_metadata: dict) -> List[str]:
+#     """
+#     Extracts sentences with their start and end times from the transcript metadata.
 
-    Args:
-        transcript_metadata (dict): The transcript metadata.
+#     Args:
+#         transcript_metadata (dict): The transcript metadata.
 
-    Returns:
-        list: Sentence concated with it's start and end times.
-    """
-    words_with_durations = []
-    transcripts_with_alignments = transcript_metadata.get("results", [])
-    index = 1
-    sentence = ""
-    for transcript in transcripts_with_alignments:
-        word = transcript["alternatives"][0]["content"]
+#     Returns:
+#         list: Sentence concated with it's start and end times.
+#     """
+#     words_with_durations = []
+#     transcripts_with_alignments = transcript_metadata.get("results", [])
+#     index = 1
+#     sentence = ""
+#     for transcript in transcripts_with_alignments:
+#         word = transcript["alternatives"][0]["content"]
 
-        if transcript["type"] == 'punctuation':
-            sentence = sentence.strip() + word + " "
-        else:
-            start_time = transcript["start_time"]
-            sentence += f"{start_time}" + '|' + word + " "
-            if start_time % 60 >index:
-                index += 1
-                sentence = ""
-                words_with_durations.append(sentence)
+#         if transcript["type"] == 'punctuation':
+#             sentence = sentence.strip() + word + " "
+#         else:
+#             start_time = transcript["start_time"]
+#             sentence += f"{start_time}" + '|' + word + " "
+#             if start_time % 60 >index:
+#                 index += 1
+#                 sentence = ""
+#                 words_with_durations.append(sentence)
 
-    return words_with_durations
+#     return words_with_durations
 
 def get_word_indices(full_text, target_text):
     # Clean and split texts
@@ -429,3 +449,36 @@ def add_sentences_to_file(sentence, filename):
 #         list: Numbered sentences.
 #     """
 #     return f"{i+1}. {sentence}"
+
+
+def split_audio_into_chunks(audio_path: str) -> List[str]:
+    """
+    Split audio into chunks and return chunk paths.
+    """
+    outputDir = '.cache/tmp/'
+    os.makedirs(outputDir, exist_ok=True)
+    payload = {
+        'fileUrl': audio_path,
+        'resultId': '3c5c778553a73441ac9d57622ed4442a'
+    }
+
+    split_info = get_split_info(payload, config)
+    logger.info(f"Split info: {split_info}")
+
+    if not split_info:  # No splitting points
+        # Convert the audio to wav
+        command = f"ffmpeg -i {audio_path} -ac 1 {outputDir}/part_000000000.wav"
+        os.system(command)
+        return [f'{outputDir}/part_000000000.wav']
+
+    segments = ",".join([str(x) for x in split_info['splittingPoints']])
+
+    command = "ffmpeg -i " + audio_path + " " \
+        + "-f segment -segment_times " + segments \
+        + " -reset_timestamps 1 -map 0:a -c:a pcm_s16le " \
+        + outputDir + "/part_%09d.wav"
+
+    os.system(command)
+
+    splitted_audio_files = sorted(glob(outputDir + '/part*.wav'), key=lambda x: int(os.path.basename(x)[:-len('.wav')].split('_')[-1]))
+    return splitted_audio_files

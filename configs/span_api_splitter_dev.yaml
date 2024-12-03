@@ -1,0 +1,22 @@
+data_dir: '.cache/tmp'
+models_dir: 'models'
+min_silence_len: 0.8
+extra_min_silence_len: 0.1
+min_sentence_len: 15.
+max_sentence_len: 180.
+return_silence_lengths: True
+init_part_len: 480.
+vad: 'webrtc'
+webrtc_params:
+  mode: 3
+  frame_duration_ms: 20
+  padding_duration_ms: 180
+silero_params:
+  trig_sum: 0.3
+  neg_trig_sum: 0.7
+  num_steps: 8
+  batch_size: 200
+  num_samples_per_window: 4000
+  min_speech_samples: 10000
+  min_silence_samples: 500
+  model: 'silero_vad_micro.jit'

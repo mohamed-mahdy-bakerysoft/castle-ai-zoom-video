@@ -2,14 +2,15 @@ import os
 import json
 from concurrent import futures
 from glob import glob
-from typing import List, Tuple, Dict
+from typing import List, Dict
 
 import streamlit as st
 from speechmatics.models import ConnectionSettings
 from speechmatics.batch_client import BatchClient
 from httpx import HTTPStatusError, ReadError
+import librosa
 
-from utils import extract_sentences_with_durations, extract_words_with_durations, logger
+from utils import extract_sentences_with_durations_with_chunks, logger, split_audio_into_chunks
 
 CONF = {
     "type": "transcription",
@@ -90,40 +91,18 @@ def transcribe_audios(
 
     return index_to_transcription_meta
 
-
-def transcribe_audio(audio_file: str, 
-                     output_file_path_sentence: str,
-                     output_file_path_words: str, 
-                     client_settings: ConnectionSettings) -> str:
+def transcribe_audio_chunk(
+        audio_file: str,
+        chunk_start_in_secs: float, 
+        client_settings: ConnectionSettings,
+        ) -> List[Dict]:
     """
     Transcribe a single audio file if transcription does not exist.
 
     :param audio_file: str: Audio file
+    :param chunk_start_in_secs: float: Start time of the chunk
     :param client_settings: ConnectionSettings: SpeechMatics Client settings
     """
-    
-    # os.makedirs('./uploaded_files/transcriptions', exist_ok=True)
-    # output_file_path_sentence = audio_file \
-    #     .replace('recordings', 'transcriptions') \
-    #     .replace('.mp3', '_trancriptions_with_align_sentence.txt')
-    
-    # output_file_path_words = audio_file \
-    #     .replace('recordings', 'transcriptions') \
-    #     .replace('.mp3', '_trancriptions_with_align_words.json')
-    
-    # Check if the transcription already exists
-    if os.path.exists(output_file_path_sentence) and  os.path.exists(output_file_path_words) :
-        logger.info(f'File {output_file_path_sentence} and {output_file_path_words} already exists')
-
-        # Reading the transcription
-        with open(output_file_path_sentence, 'r') as f:
-            transcript_with_durations_sentence = f.readlines()
-        
-        with open(output_file_path_words) as f:
-            transcript_word_durations_sentence = json.load(f)
-         
-        return transcript_with_durations_sentence, transcript_word_durations_sentence
-    
 
     with BatchClient(client_settings) as client:
         try:
@@ -145,13 +124,110 @@ def transcribe_audio(audio_file: str,
             else:
                 raise e
         else:
-            transcript_with_durations_sentence, transcript_word_durations_sentence = extract_sentences_with_durations(transcript_meta)
-            #Saving the transcription in txt file
-            with open(output_file_path_sentence, 'w') as f:
-                f.writelines(transcript_with_durations_sentence)
+            transcript_with_durations, transcript_word_durations = extract_sentences_with_durations_with_chunks(
+                transcript_meta,
+                chunk_start_in_secs
+            )
 
+    return transcript_with_durations, transcript_word_durations
+
+def transcribe_audio_chunks(
+        audio_chunks: List[str],
+        client_settings: ConnectionSettings
+        ) -> List[str]:
+    """
+    Transcribe audio chunks and save each of them.
+    
+    :param audio_chunks: list: Audio chunk paths
+    :param client_settings: ConnectionSettings: SpeechMatics Client settings
+
+    :return: List: Transcriptions with there start and end times
+    """
+    # Initializing the progress bar
+    progress_bar = st.progress(0, text='Transcribing recordings...')
+    index_to_chunk_transcript = {}
+    index_to_chunk_transcript_words = {}
+    chunk_start = 0
+
+    with futures.ThreadPoolExecutor() as executor:
+        future_to_index = {}
+        for i, chunk_path in enumerate(audio_chunks):
+
+            audio, sampling_rate = librosa.load(chunk_path, sr=None)
+            chunk_duration = audio.shape[0] / sampling_rate
+
+            future = executor.submit(transcribe_audio_chunk, chunk_path, chunk_start, client_settings)
+            future_to_index[future] = i
+
+            chunk_start += chunk_duration
+
+        for j, future in enumerate(futures.as_completed(future_to_index)):
+            i = future_to_index[future]
+            res = future.result()
+            index_to_chunk_transcript[i] = res[0]
+            index_to_chunk_transcript_words[i] = res[1]
+            # Update the progress bar
+            progress_bar.progress((j + 1) / len(audio_chunks), text='Transcribing recordings...')
+    
+    # Close the progress bar
+    progress_bar.empty()
+    st.write(f'Transcription procress completed. Number of transcriptions: {len(index_to_chunk_transcript)}.')
+
+    # Merging the chunks transcriptions
+    merged_chunks_transcript = []
+    for i in range(len(index_to_chunk_transcript)):
+        merged_chunks_transcript.extend(
+            [f"{chunk_info['sentence']}|{chunk_info['start_time']}|{chunk_info['end_time']}\n" \
+              for chunk_info in index_to_chunk_transcript[i]]
+        )   
+    merged_chunks_words = []
+    for i in range(len(index_to_chunk_transcript)):
+        merged_chunks_words.extend(
+            [sentence_info_words for sentence_info_words in index_to_chunk_transcript_words[i]]
+        ) 
+
+    # Deleting the temporary audio files
+    os.system('rm -rf .cache/tmp/*')
+
+    return merged_chunks_transcript, merged_chunks_words
+
+
+def transcribe_audio(audio_file: str, 
+                     output_file_path_sentence: str,
+                     output_file_path_words: str, 
+                     client_settings: ConnectionSettings) -> str:
+    """
+    Transcribe a single audio file if transcription does not exist.
+
+    :param audio_file: str: Audio file
+    :param client_settings: ConnectionSettings: SpeechMatics Client settings
+    """
+    
+    if os.path.exists(output_file_path_sentence) and  os.path.exists(output_file_path_words) :
+        logger.info(f'File {output_file_path_sentence} and {output_file_path_words} already exists')
+
+        # Reading the transcription
+        with open(output_file_path_sentence, 'r') as f:
+            transcript_with_durations_sentence = f.readlines()
+        
+        with open(output_file_path_words) as f:
+            transcript_word_durations_sentence = json.load(f)
+         
+        return transcript_with_durations_sentence, transcript_word_durations_sentence
+    else:
+        audio_chunks_paths = split_audio_into_chunks(audio_file)
+        audio_transcript, transcript_word_durations_sentence = transcribe_audio_chunks(
+                    audio_chunks_paths, 
+                    client_settings
+                )
+        if audio_transcript:  # If transcription is empty no need to create an empty txt file
+            with open(output_file_path_sentence, 'w') as f:
+                f.writelines(audio_transcript)
+            #Saving the transcription in txt file
+            
             logger.info(f"Transcription sentence saved to {output_file_path_sentence}")
             with open(output_file_path_words, 'w') as file:
                 json.dump(transcript_word_durations_sentence, file)
 
-    return transcript_with_durations_sentence, transcript_word_durations_sentence
+        return audio_transcript, transcript_word_durations_sentence
+    

@@ -24,7 +24,6 @@ class GPTAdapter(Predictor):
 class ClaudeAdapter(Predictor):
     def __init__(self, model_name, api_key):
         super().__init__(model_name, api_key)
-        print(self.api_key)
         self.client = anthropic.Anthropic(api_key = self.api_key)
         self.system_prompt = """
                 You are an intelligent assistant who helps to identify zoom-in moments in a video transcript.
@@ -48,10 +47,10 @@ class ClaudeAdapter(Predictor):
                 - Ensure the chosen jump cuts do not interfere with subsequent zoom-ins and adequate spacing.
 
                 # CRITICAL TIMING RULE
-                - You MUST select ONE zoom-in moment per minute of video duration
+                - You MUST select EXACTLY ONE zoom-in moment per minute of video duration
                 - For example:
-                - 5-minute video = approximately 5 zoom-in moments
-                - 10-minute video = approximately 10 zoom-in moments
+                - 5-minute video = EXACTLY 5 zoom-in moments
+                - 10-minute video = EXACTLY 10 zoom-in moments
                 - ENSURE at least a **3-second interval** between the zoom-in completion and the jump cut
                 - Your output should strictly follow this 1-per-minute rule regardless of how many good candidates you find
        
@@ -107,7 +106,7 @@ class ClaudeAdapter(Predictor):
         self.prompt =  """ Analyze the provided video transcript to determine optimal placements for fast zoom-ins based on the given priority indicators."""
         
 
-    def preprocess_input(inputs):
+    def preprocess_input(self, inputs):
         return ''.join(inputs)
     
     def extract_json(self, response):
@@ -115,7 +114,9 @@ class ClaudeAdapter(Predictor):
         json_end = response.rfind("}")
         return json.loads(response[json_start:json_end+1])
             
-    def get_predictions(self, inputs, num_inputs):
+    def get_predictions(self, inputs, num_inputs=None):
+        if num_inputs is None:
+            num_inputs = len(inputs)
         predictions = []
         for inp in inputs[:num_inputs]:
             preprocessed_input = self.preprocess_input(inp)

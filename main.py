@@ -17,10 +17,17 @@ import json
 from predictor import ClaudeAdapter
 from zoom_effect import ZoomEffect, process_video
 from dotenv import load_dotenv, find_dotenv
+import warnings
 
 _ = load_dotenv(find_dotenv())
 
+
+# Ignore warnings
+st.set_option('deprecation.showfileUploaderEncoding', False)
+warnings.filterwarnings("ignore")
+
 SPLIT_SENTENCE_BY_DURATION = 240 * 7
+ZOOM_DURATION = 0.7
 
 # Set up logging configuration
 def  get_zooms(preds, sntnces_splitted_by_duration, splittedwords, slow=False, jumpcut=False):
@@ -48,7 +55,7 @@ def  get_zooms(preds, sntnces_splitted_by_duration, splittedwords, slow=False, j
     return zoom_effects
 
 
-def  get_zooms_claude(preds, sntnces_splitted_by_duration, splittedwords, slow=False, jumpcut=False, hold=False):
+def  get_zooms_claude(preds, sntnces_splitted_by_duration, splittedwords,  zoom_in_duration=None, slow=False, jumpcut=False, hold=False):
     zoom_effects = []
     for i, pred in enumerate(preds):
         prediction = pred.get(list(pred.keys())[0], [])
@@ -57,6 +64,7 @@ def  get_zooms_claude(preds, sntnces_splitted_by_duration, splittedwords, slow=F
             text_applied = p['zoom_in_phrase']
             #reason = p['reason']
             zoom_in_scale = 1.3
+            zoom_duration = zoom_in_duration
             transition_sentence_num = p['transition_sentence_number']
             transition_sentence_word = p['transition_sentence_word']
 
@@ -72,9 +80,9 @@ def  get_zooms_claude(preds, sntnces_splitted_by_duration, splittedwords, slow=F
             end_time = splittedwords[i][transition_sentence_num-1][st_idx_cut][1]
             
             if not slow and jumpcut and hold:
-                zoom_effects.append(ZoomEffect(start_time, end_time, 1, zoom_in_scale, 0))   
+                zoom_effects.append(ZoomEffect(start_time, end_time, zoom_duration, zoom_in_scale, 0))   
             elif not slow and jumpcut and not hold:
-                zoom_effects.append(ZoomEffect(start_time, end_time, 1, zoom_in_scale, 0, lag_time=0))
+                zoom_effects.append(ZoomEffect(start_time, end_time, zoom_duration, zoom_in_scale, 0, lag_time=0))
 
     return zoom_effects
 
@@ -122,11 +130,6 @@ def main():
             
             save_audio_from_video(video_path,
                                   video_path.replace('.mp4', '.mp3'))
-
-            # Clear output
-            # st.write("Before clearing session state ", st.session_state)
-            # clear_cache(st.session_state)
-            # st.write("After clearing session state ", st.session_state)
 
             st.session_state.audio_file = video_path.replace('.mp4', '.mp3')
             st.session_state.video_file = video_path
@@ -211,39 +214,6 @@ def main():
         #             predictions = json.load(f)
         #         st.info(f"Loaded existing predictions from {json_file_path}")
                         
-
-
-                # zoom_effects.append(ZoomEffect(start_time, (end_time-start_time), zoom_in_scale))
-
-                #Zoom effects controls
-                # st.subheader("Add Zoom In Effects")
-                
-                # zoom_effects = []
-                # num_effects = st.number_input("Number of zoom in points", min_value=1, max_value=5, value=1)
-                
-                # for i in range(num_effects):
-                #     st.write(f"Zoom In Effect {i+1}")
-                #     col1, col2, col3 = st.columns(3)
-                    
-                #     with col1:
-                #         start_time = st.number_input(f"Start Time (ms) #{i+1}", 
-                #                                 min_value=0, 
-                #                                 value=1000*i)
-                #     with col2:
-                #         duration = st.number_input(f"Duration (ms) #{i+1}", 
-                #                                 min_value=100, 
-                #                                 value=1000)
-                #     with col3:
-                #         scale = st.slider(f"Final Zoom Scale #{i+1}", 
-                #                         min_value=1.0, 
-                #                         max_value=3.0, 
-                #                         value=1.5, 
-                #                         step=0.1)
-                        
-                #     zoom_effects.append(ZoomEffect(start_time, duration, scale))
-        
-            # Process button
-        # st.write(st.session_state)
         if "button_clicked" not in st.session_state:
             st.session_state.button_clicked = None
         
@@ -270,7 +240,7 @@ def main():
             audio_file_name = st.session_state.audio_file.split('/')[-1].split('.')[0]
             json_file_path = f"claude_results/{audio_file_name}.json"
             if not os.path.exists(json_file_path):
-                st.session_state.predictions = predictor.get_predictions(splitted_sentences, num = len(splitted_sentences))
+                st.session_state.predictions = predictor.get_predictions(splitted_sentences, num_inputs = len(splitted_sentences))
                 with open(json_file_path, "w") as f:
                     json.dump(st.session_state.predictions, f)
                 st.success(f"Predictions saved to {json_file_path}")
@@ -307,7 +277,7 @@ def main():
             st.write("Fast Zoom In-Hold-Cut clicked!")
             try:
                 with st.spinner("Processing video..."):
-                    st.session_state.zoom_effects = get_zooms_claude(st.session_state.predictions, st.session_state.sentences_splitted_by_duration, st.session_state.splitted_words, slow=False, jumpcut=True, hold=True)
+                    st.session_state.zoom_effects = get_zooms_claude(st.session_state.predictions, st.session_state.sentences_splitted_by_duration, st.session_state.splitted_words, zoom_in_duration=ZOOM_DURATION, slow=False, jumpcut=True, hold=True)
                     st.session_state.output_path = process_video(video_path, st.session_state.zoom_effects)
                     st.session_state.button_clicked = None
             except Exception as e:

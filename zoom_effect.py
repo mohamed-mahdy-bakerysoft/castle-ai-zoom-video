@@ -13,12 +13,21 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
+
 class ZoomEffect:
-    def __init__(self, start_time: float, end_time: float, zoom_in_duration: float,  scale: float, zoom_out_duration: float = 0, lag_time=None):
+    def __init__(
+        self,
+        start_time: float,
+        end_time: float,
+        zoom_in_duration: float,
+        scale: float,
+        zoom_out_duration: float = 0,
+        lag_time=None,
+    ):
         self.start_time = start_time
         self.end_time = end_time
         if lag_time is not None:
-            self.lag_time = lag_time   
+            self.lag_time = lag_time
         else:
             self.lag_time = end_time - start_time - zoom_in_duration - zoom_out_duration
         self.zoom_in_duration = zoom_in_duration
@@ -36,7 +45,7 @@ class ZoomEffect:
             progress = time_in_zoom_out / self.zoom_out_duration
             return self.scale - (self.scale - 1.0) * progress
         return 1.0
-    
+
     def get_scale_at_time_with_lag(self, current_time: float, scale=None) -> float:
         if scale is None:
             scale = self.scale
@@ -44,32 +53,50 @@ class ZoomEffect:
         if 0 <= time_in_effect <= self.zoom_in_duration:
             progress = time_in_effect / self.zoom_in_duration
             return 1.0 + (scale - 1.0) * progress
-        elif self.zoom_in_duration <= time_in_effect <= self.lag_time + self.zoom_in_duration:
+        elif (
+            self.zoom_in_duration
+            <= time_in_effect
+            <= self.lag_time + self.zoom_in_duration
+        ):
             return scale
-        elif 0 <= time_in_effect - self.zoom_in_duration - self.lag_time <= self.zoom_out_duration:
+        elif (
+            0
+            <= time_in_effect - self.zoom_in_duration - self.lag_time
+            <= self.zoom_out_duration
+        ):
             time_in_zoom_out = time_in_effect - self.zoom_in_duration - self.lag_time
             progress = time_in_zoom_out / self.zoom_out_duration
             return scale - (scale - 1.0) * progress
         return 1.0
 
-def apply_zoom(frame: np.ndarray, scale: float, center_x: int = None, center_y: int=None) -> np.ndarray:
+
+def apply_zoom(
+    frame: np.ndarray, scale: float, center_x: int = None, center_y: int = None
+) -> np.ndarray:
     if scale == 1.0:
         return frame
     height, width = frame.shape[:2]
     if center_x is None and center_y is None:
-        center_x, center_y = width / 2, height / 2 -  (height / 4)
-    M = np.float32([
-        [scale, 0, center_x * (1 - scale)],
-        [0, scale, center_y * (1 - scale)]
-    ])
-    return cv2.warpAffine(frame, M, (width, height), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+        center_x, center_y = width / 2, height / 2 - (height / 4)
+    M = np.float32(
+        [[scale, 0, center_x * (1 - scale)], [0, scale, center_y * (1 - scale)]]
+    )
+    return cv2.warpAffine(
+        frame,
+        M,
+        (width, height),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+    )
+
 
 def extract_audio(input_video: str, output_audio: str):
-    command = ['ffmpeg', '-i', input_video, '-vn', '-acodec', 'aac', '-y', output_audio]
+    command = ["ffmpeg", "-i", input_video, "-vn", "-acodec", "aac", "-y", output_audio]
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode != 0:
         logging.error("Audio extraction failed: %s", result.stderr.decode())
         raise RuntimeError("Failed to extract audio")
+
 
 def process_frames_worker(frame_queue, out, zoom_scales):
     while True:
@@ -81,7 +108,7 @@ def process_frames_worker(frame_queue, out, zoom_scales):
 
             frame_count, frame = frame_data
             current_scale = zoom_scales[frame_count]
-            
+
             if current_scale != 1.0:
                 frame = apply_zoom(frame, current_scale)
 
@@ -91,6 +118,7 @@ def process_frames_worker(frame_queue, out, zoom_scales):
         except Exception as e:
             logging.error(f"Error processing frame: {e}")
             frame_queue.task_done()  # Ensure task_done is called even in case of error
+
 
 def process_bounding_boxes(frame_queue, output_queue, zoom_scales):
     while True:
@@ -104,7 +132,7 @@ def process_bounding_boxes(frame_queue, output_queue, zoom_scales):
             current_scale = zoom_scales[frame_count]
             refined_scale, _, _ = get_bounding_box(frame)
             if current_scale != 1.0:
-                   
+
                 if refined_scale is not None:
                     output_queue.put((frame_count, math.ceil(refined_scale * 10) / 10))
                 else:
@@ -116,7 +144,7 @@ def process_bounding_boxes(frame_queue, output_queue, zoom_scales):
         except Exception as e:
             logging.error(f"Error processing frame: {e}")
             frame_queue.task_done()  # Ensure task_done is called even in case of error
-            
+
 
 def process_video(video_path: str, zoom_effects: List[ZoomEffect]) -> str:
     cap = cv2.VideoCapture(video_path)
@@ -140,7 +168,9 @@ def process_video(video_path: str, zoom_effects: List[ZoomEffect]) -> str:
         logging.error("An error occurred during audio extraction: %s", e)
         return
 
-    out = cv2.VideoWriter(temp_video, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
+    out = cv2.VideoWriter(
+        temp_video, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height)
+    )
     if not out.isOpened():
         raise RuntimeError("Failed to initialize video writer")
 
@@ -153,7 +183,7 @@ def process_video(video_path: str, zoom_effects: List[ZoomEffect]) -> str:
             zoom_scales[frame_num] = effect.get_scale_at_time_with_lag(current_time)
 
     progress_bar = st.progress(0)
-    output_queue = Queue(maxsize = total_frames)
+    output_queue = Queue(maxsize=total_frames)
     frame_queue = Queue(maxsize=400)
 
     with ThreadPoolExecutor(max_workers=16) as executor:
@@ -176,31 +206,31 @@ def process_video(video_path: str, zoom_effects: List[ZoomEffect]) -> str:
         frame_queue.put(None)
         # Wait for the processing to complete
         frame_queue.join()
-    
+
     processed_scales = {}
     while not output_queue.empty():
         frame_count, processed_scale = output_queue.get()
         processed_scales[frame_count] = processed_scale
-    
-    
+
     for effect in zoom_effects:
-        start_frame = int(effect.start_time * fps) + int(effect.zoom_in_duration*fps)
-        end_frame = min(total_frames, start_frame + int((effect.total_duration - effect.zoom_in_duration) * fps))
+        start_frame = int(effect.start_time * fps) + int(effect.zoom_in_duration * fps)
+        end_frame = min(
+            total_frames,
+            start_frame + int((effect.total_duration - effect.zoom_in_duration) * fps),
+        )
         values = [processed_scales[key] for key in range(start_frame, end_frame)]
         min_zoom_scale = min(values)
         for frame_num in range(start_frame, end_frame):
             zoom_scales[frame_num] = min_zoom_scale
         effect.scale = min_zoom_scale
-        
-    
+
     for effect in zoom_effects:
-        start_frame = int(effect.start_time * fps) 
+        start_frame = int(effect.start_time * fps)
         end_frame = min(total_frames, start_frame + int(effect.zoom_in_duration * fps))
         for frame_num in range(start_frame, end_frame):
             current_time = frame_num / fps
             zoom_scales[frame_num] = effect.get_scale_at_time_with_lag(current_time)
-    
-    
+
     cap = cv2.VideoCapture(video_path)
     frame_queue = Queue(maxsize=400)
     with ThreadPoolExecutor(max_workers=16) as executor:
@@ -223,7 +253,7 @@ def process_video(video_path: str, zoom_effects: List[ZoomEffect]) -> str:
 
         # Signal that no more frames will be added
         frame_queue.put(None)
-        
+
         # Wait for the processing to complete
         frame_queue.join()
         out.release()
@@ -232,10 +262,24 @@ def process_video(video_path: str, zoom_effects: List[ZoomEffect]) -> str:
         status_text.text("Combining video with audio...")
 
         ffmpeg_command = [
-            'ffmpeg', '-i', temp_video, '-i', temp_audio, '-c:v', 'libx264',
-            '-c:a', 'copy', '-shortest', '-movflags', '+faststart', '-y', final_output
+            "ffmpeg",
+            "-i",
+            temp_video,
+            "-i",
+            temp_audio,
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "copy",
+            "-shortest",
+            "-movflags",
+            "+faststart",
+            "-y",
+            final_output,
         ]
-        result = subprocess.run(ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        result = subprocess.run(
+            ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
 
         if result.returncode != 0:
             logging.error("FFmpeg error during combination: %s", result.stderr.decode())
@@ -249,4 +293,3 @@ def process_video(video_path: str, zoom_effects: List[ZoomEffect]) -> str:
 
         status_text.text("Processing complete!")
         return final_output
-    

@@ -6,25 +6,25 @@ import json
 class Predictor:
     def __init__(self, model_name, api_key):
         self.model_name = model_name
-        self.api_key = api_key        
+        self.api_key = api_key
 
 
 class GPTAdapter(Predictor):
     def __init__(self, model_name, api_key):
         super().__init__(model_name)
-        self.client =OpenAI(api_key=api_key,)
-        
+        self.client = OpenAI(
+            api_key=api_key,
+        )
 
     def predict(self, model_name, input_text):
         response = self.client.predict(model_name, input_text)
         return response
-    
-        
+
 
 class ClaudeAdapter(Predictor):
     def __init__(self, model_name, api_key):
         super().__init__(model_name, api_key)
-        self.client = anthropic.Anthropic(api_key = self.api_key)
+        self.client = anthropic.Anthropic(api_key=self.api_key)
         self.system_prompt = """
                 You are an intelligent assistant who helps to identify zoom-in moments in a video transcript.
                 
@@ -103,46 +103,33 @@ class ClaudeAdapter(Predictor):
                 - **Transition Reason**: Marks the end of the idea in sentence 15, ensures a natural flow to the next sentence.
         
         """
-        self.prompt =  """ Analyze the provided video transcript to determine optimal placements for fast zoom-ins based on the given priority indicators."""
-        
+        self.prompt = """ Analyze the provided video transcript to determine optimal placements for fast zoom-ins based on the given priority indicators."""
 
     def preprocess_input(self, inputs):
-        return ''.join(inputs)
-    
+        return "".join(inputs)
+
     def extract_json(self, response):
         json_start = response.index("{")
         json_end = response.rfind("}")
-        return json.loads(response[json_start:json_end+1])
-            
+        return json.loads(response[json_start : json_end + 1])
+
     def get_predictions(self, inputs, num_inputs=None):
         if num_inputs is None:
             num_inputs = len(inputs)
         predictions = []
         for inp in inputs[:num_inputs]:
             preprocessed_input = self.preprocess_input(inp)
-            prompt_ = self.prompt + '\n' + preprocessed_input
+            prompt_ = self.prompt + "\n" + preprocessed_input
             message = self.client.messages.create(
                 model=self.model_name,
                 max_tokens=4000,
                 temperature=0,
                 system=self.system_prompt,
                 messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": prompt_
-                            }
-                        ]
-                    }
-                ]
-                )
+                    {"role": "user", "content": [{"type": "text", "text": prompt_}]}
+                ],
+            )
             out = self.extract_json(message.content[0].text)
             predictions.append(out)
 
-            
         return predictions
-    
-        
-    

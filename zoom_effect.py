@@ -4,13 +4,12 @@ import subprocess
 from typing import List
 import cv2
 import numpy as np
-import math
 import streamlit as st
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
-from face_bounding_box_detection import get_bounding_box
 import logging
-
+from utils.audio_text_utils import extract_audio
+from utils.zoom_utils import process_bounding_boxes, process_scales_centers_after_extracting_boundaries, get_initial_zoom_scales
 logging.basicConfig(level=logging.INFO)
 
 
@@ -90,15 +89,7 @@ def apply_zoom(
     )
 
 
-def extract_audio(input_video: str, output_audio: str):
-    command = ["ffmpeg", "-i", input_video, "-vn", "-acodec", "aac", "-y", output_audio]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if result.returncode != 0:
-        logging.error("Audio extraction failed: %s", result.stderr.decode())
-        raise RuntimeError("Failed to extract audio")
-
-
-def process_frames_worker(frame_queue, out, zoom_scales):
+def process_frames_worker(frame_queue, out, zoom_scales, processed_centers):
     while True:
         try:
             frame_data = frame_queue.get()
@@ -110,7 +101,7 @@ def process_frames_worker(frame_queue, out, zoom_scales):
             current_scale = zoom_scales[frame_count]
 
             if current_scale != 1.0:
-                frame = apply_zoom(frame, current_scale)
+                frame = apply_zoom(frame, current_scale, processed_centers[frame_count][0], center_y=processed_centers[frame_count][1])
 
             out.write(frame)
             frame_queue.task_done()
@@ -119,31 +110,6 @@ def process_frames_worker(frame_queue, out, zoom_scales):
             logging.error(f"Error processing frame: {e}")
             frame_queue.task_done()  # Ensure task_done is called even in case of error
 
-
-def process_bounding_boxes(frame_queue, output_queue, zoom_scales):
-    while True:
-        try:
-            frame_data = frame_queue.get()
-            if frame_data is None:
-                frame_queue.task_done()
-                break  # Exit loop when sentinel is received
-
-            frame_count, frame = frame_data
-            current_scale = zoom_scales[frame_count]
-            refined_scale, _, _ = get_bounding_box(frame)
-            if current_scale != 1.0:
-
-                if refined_scale is not None:
-                    output_queue.put((frame_count, math.ceil(refined_scale * 10) / 10))
-                else:
-                    output_queue.put((frame_count, current_scale))
-            else:
-                output_queue.put((frame_count, current_scale))
-            frame_queue.task_done()
-
-        except Exception as e:
-            logging.error(f"Error processing frame: {e}")
-            frame_queue.task_done()  # Ensure task_done is called even in case of error
 
 
 def process_video(video_path: str, zoom_effects: List[ZoomEffect]) -> str:
@@ -161,7 +127,6 @@ def process_video(video_path: str, zoom_effects: List[ZoomEffect]) -> str:
 
     status_text = st.empty()
     status_text.text("Extracting audio...")
-
     try:
         extract_audio(video_path, temp_audio)
     except RuntimeError as e:
@@ -174,14 +139,7 @@ def process_video(video_path: str, zoom_effects: List[ZoomEffect]) -> str:
     if not out.isOpened():
         raise RuntimeError("Failed to initialize video writer")
 
-    zoom_scales = [1.0] * total_frames
-    for effect in zoom_effects:
-        start_frame = int(effect.start_time * fps)
-        end_frame = min(total_frames, start_frame + int(effect.total_duration * fps))
-        for frame_num in range(start_frame, end_frame):
-            current_time = frame_num / fps
-            zoom_scales[frame_num] = effect.get_scale_at_time_with_lag(current_time)
-
+    zoom_scales = get_initial_zoom_scales(total_frames, fps, zoom_effects)
     progress_bar = st.progress(0)
     output_queue = Queue(maxsize=total_frames)
     frame_queue = Queue(maxsize=400)
@@ -207,34 +165,12 @@ def process_video(video_path: str, zoom_effects: List[ZoomEffect]) -> str:
         # Wait for the processing to complete
         frame_queue.join()
 
-    processed_scales = {}
-    while not output_queue.empty():
-        frame_count, processed_scale = output_queue.get()
-        processed_scales[frame_count] = processed_scale
-
-    for effect in zoom_effects:
-        start_frame = int(effect.start_time * fps) + int(effect.zoom_in_duration * fps)
-        end_frame = min(
-            total_frames,
-            start_frame + int((effect.total_duration - effect.zoom_in_duration) * fps),
-        )
-        values = [processed_scales[key] for key in range(start_frame, end_frame)]
-        min_zoom_scale = min(values)
-        for frame_num in range(start_frame, end_frame):
-            zoom_scales[frame_num] = min_zoom_scale
-        effect.scale = min_zoom_scale
-
-    for effect in zoom_effects:
-        start_frame = int(effect.start_time * fps)
-        end_frame = min(total_frames, start_frame + int(effect.zoom_in_duration * fps))
-        for frame_num in range(start_frame, end_frame):
-            current_time = frame_num / fps
-            zoom_scales[frame_num] = effect.get_scale_at_time_with_lag(current_time)
-
+    zoom_scales, processed_centers = process_scales_centers_after_extracting_boundaries(output_queue, zoom_scales, zoom_effects, total_frames, fps)
     cap = cv2.VideoCapture(video_path)
     frame_queue = Queue(maxsize=400)
+    print("process frames worker")
     with ThreadPoolExecutor(max_workers=16) as executor:
-        executor.submit(process_frames_worker, frame_queue, out, zoom_scales)
+        executor.submit(process_frames_worker, frame_queue, out, zoom_scales, processed_centers)
 
         frame_count = 0
         while cap.isOpened():

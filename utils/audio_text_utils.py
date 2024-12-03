@@ -5,10 +5,6 @@ import librosa
 import logging
 import os
 import re
-from emphassess.src.emphasis_classifier.utils.infer_utils import (
-    infer_audio,
-    Wav2Vec2ForAudioFrameClassification,
-)
 import torchaudio as ta
 from tqdm import tqdm
 from glob import glob
@@ -213,32 +209,6 @@ def split_and_save_audio(audio_path, output_file_path_sentence, splitted_audio_d
                 )
 
 
-def save_emphasis_predictions(files, splitted_audio_txt_dir):
-
-    if not os.path.exists(splitted_audio_txt_dir) or (
-        os.path.exists(splitted_audio_txt_dir)
-        and len(os.listdir(splitted_audio_txt_dir)) != len(files)
-    ):
-        model = Wav2Vec2ForAudioFrameClassification.from_pretrained(
-            "emphassess/src/emphasis_classifier/checkpoints/"
-        )
-        os.makedirs(splitted_audio_txt_dir, exist_ok=True)
-        for f in files:
-            pred, emph_boundaries = infer_audio(f, model)
-
-            print("Emphasis boundaries (in seconds): ", emph_boundaries)
-            # Get the base name of the audio file
-            output_filename = f.split("/")[-1].split(".")[0] + ".txt"
-
-            with open(os.path.join(splitted_audio_txt_dir, output_filename), "w") as f:
-                for start, end in emph_boundaries:
-                    # Write the interval to the file formatted to two decimal places
-                    f.write(f"{start:.2f}-{end:.2f}\n")
-
-            print(
-                f"Emphasized intervals saved to {os.path.join(splitted_audio_txt_dir, output_filename)}"
-            )
-
 
 def construct_new_sentences(
     files, audio_basename, word_data, sentence_info_path_updated, sentence_path
@@ -431,3 +401,12 @@ def split_audio_into_chunks(audio_path: str) -> List[str]:
         key=lambda x: int(os.path.basename(x)[: -len(".wav")].split("_")[-1]),
     )
     return splitted_audio_files
+
+
+def extract_audio(input_video: str, output_audio: str):
+    command = ["ffmpeg", "-i", input_video, "-vn", "-acodec", "aac", "-y", output_audio]
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        logging.error("Audio extraction failed: %s", result.stderr.decode())
+        raise RuntimeError("Failed to extract audio")
+

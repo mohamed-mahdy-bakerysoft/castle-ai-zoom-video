@@ -10,7 +10,7 @@ from speechmatics.batch_client import BatchClient
 from httpx import HTTPStatusError, ReadError
 import librosa
 
-from utils import (
+from utils.audio_text_utils import (
     extract_sentences_with_durations_with_chunks,
     logger,
     split_audio_into_chunks,

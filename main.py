@@ -11,7 +11,8 @@ import base64
 import os
 import hashlib
 from pathlib import Path
-from utils import (
+from asr import get_client_settings, transcribe_audio
+from utils.audio_text_utils import (
     save_audio_from_video,
     check_ffmpeg,
     split_sentences_by_seconds,
@@ -19,11 +20,10 @@ from utils import (
     split_words_by_duration,
     add_silence_duration,
     split_and_save_audio,
-    save_emphasis_predictions,
     construct_new_sentences,
     add_sentences_to_file,
 )
-from asr import get_client_settings, transcribe_audio
+from utils.emphasess_utils import save_emphasis_predictions
 import json
 from predictor import ClaudeAdapter
 from zoom_effect import ZoomEffect, process_video
@@ -230,13 +230,16 @@ def main():
         files = glob(f"{splitted_audio_dir}/*.mp3")
         splitted_audio_txt_dir = f"./uploaded_files/emphasis_detection/{video_path.split('/')[-1].split('.')[0]}"
 
-        save_emphasis_predictions(files, splitted_audio_txt_dir)
+        with st.spinner("Detection of emphasized phrases ..."):
+            save_emphasis_predictions(files, splitted_audio_txt_dir)
+        
         audio_basename = os.path.basename(st.session_state.audio_file)
         # add silence duration to the words
         # with open(st.session_state.interview_to_transcription_meta_words) as f:
         word_data = (
             st.session_state.interview_to_transcription_meta_words
         )  # json.load(f)
+        
         add_silence_duration(word_data)
 
         # Change the sentence capitalization
@@ -292,7 +295,6 @@ def main():
 
         if "button_clicked" not in st.session_state:
             st.session_state.button_clicked = None
-
         if "predictions" not in st.session_state:
             st.session_state.predictions = None
         if "zoom_effects" not in st.session_state:
@@ -325,11 +327,12 @@ def main():
             audio_file_name = st.session_state.audio_file.split("/")[-1].split(".")[0]
             json_file_path = f"claude_results/{audio_file_name}.json"
             if not os.path.exists(json_file_path):
-                st.session_state.predictions = predictor.get_predictions(
-                    splitted_sentences, num_inputs=len(splitted_sentences)
-                )
-                with open(json_file_path, "w") as f:
-                    json.dump(st.session_state.predictions, f)
+                with st.spinner("Predicting zoom points..."):
+                    st.session_state.predictions = predictor.get_predictions(
+                        splitted_sentences, num_inputs=len(splitted_sentences)
+                    )
+                    with open(json_file_path, "w") as f:
+                        json.dump(st.session_state.predictions, f)
                 st.success(f"Predictions saved to {json_file_path}")
             else:
                 with open(json_file_path, "r") as f:
@@ -337,7 +340,6 @@ def main():
                 st.info(f"Loaded existing predictions from {json_file_path}")
             # st.session_state.predictions = predictions
 
-        output_path = None
         if st.session_state.predictions:
 
             [col1] = st.columns(1)
@@ -363,7 +365,7 @@ def main():
         if st.session_state.button_clicked == "fast_zoom_hold_cut":
             st.write("Fast Zoom In-Hold-Cut clicked!")
             try:
-                with st.spinner("Processing video..."):
+                with st.spinner("Processing video zooms..."):
                     st.session_state.zoom_effects = get_zooms_claude(
                         st.session_state.predictions,
                         st.session_state.sentences_splitted_by_duration,

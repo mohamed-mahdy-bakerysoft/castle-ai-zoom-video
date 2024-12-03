@@ -16,11 +16,6 @@ class GPTAdapter(Predictor):
             api_key=api_key,
         )
 
-    def predict(self, model_name, input_text):
-        response = self.client.predict(model_name, input_text)
-        return response
-
-
 class ClaudeAdapter(Predictor):
     def __init__(self, model_name, api_key):
         super().__init__(model_name, api_key)
@@ -114,9 +109,11 @@ class ClaudeAdapter(Predictor):
         return json.loads(response[json_start : json_end + 1])
 
     def get_predictions(self, inputs, num_inputs=None):
+        
         if num_inputs is None:
             num_inputs = len(inputs)
         predictions = []
+        
         for inp in inputs[:num_inputs]:
             preprocessed_input = self.preprocess_input(inp)
             prompt_ = self.prompt + "\n" + preprocessed_input

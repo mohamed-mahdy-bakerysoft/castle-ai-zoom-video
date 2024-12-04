@@ -1,0 +1,10 @@
+span_api_splitter/__pycache__
+uploaded_files/
+temp_output/
+processed_videos/
+notebooks/
+utils/__pycache__/
+gpt_results/
+demo_logs.log
+__pycache__/
+claude_results/

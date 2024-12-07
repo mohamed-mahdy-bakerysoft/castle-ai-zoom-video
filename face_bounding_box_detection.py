@@ -62,21 +62,21 @@ def get_bounding_box(frame):
                 int(bboxC.height * height),
             )
 
-            x_new, y_new, w_new, h_new = expand_bounding_box(
-                (x, y, w, h), height, width, height_padding=HEIGHT_PADDING, width_padding=WIDTH_PADDING
-            )
-            center_x, center_y = x_new + w_new // 2, y_new + h_new // 2
+            # x_new, y_new, w_new, h_new = expand_bounding_box(
+            #     (x, y, w, h), height, width, height_padding=HEIGHT_PADDING, width_padding=WIDTH_PADDING
+            # )
+            # center_x, center_y = x_new + w_new // 2, y_new + h_new // 2
             # max_up = center_y
             # max_down = height - center_y
             # max_left = center_x
             # max_right = width - center_x
             
-            scale_top = center_y / (center_y - y_new) if center_y != y_new else float('inf')
-            scale_bottom = (height - center_y) / ((y_new + h_new) - center_y) if (y_new + h_new) != center_y else float('inf')
-            scale_left = center_x / (center_x - x_new) if center_x != x_new else float('inf')
-            scale_right = (width - center_x) / ((x_new + w_new) - center_x) if (x_new + w_new) != center_x else float('inf')
+            # scale_top = center_y / (center_y - y_new) if center_y != y_new else float('inf')
+            # scale_bottom = (height - center_y) / ((y_new + h_new) - center_y) if (y_new + h_new) != center_y else float('inf')
+            # scale_left = center_x / (center_x - x_new) if center_x != x_new else float('inf')
+            # scale_right = (width - center_x) / ((x_new + w_new) - center_x) if (x_new + w_new) != center_x else float('inf')
             
-            min_scale = min(scale_top, scale_bottom, scale_left, scale_right)
-            return min_scale, center_x, center_y
+            #min_scale = min(scale_top, scale_bottom, scale_left, scale_right)
+            return (x, y, w, h)#min_scale, center_x, center_y, True
     else:
-        return None, width // 2, height // 2
+        return None

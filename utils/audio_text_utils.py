@@ -142,7 +142,7 @@ def split_sentences_by_seconds(sentences_metadata: dict, seconds: int) -> List[s
 
 def get_word_indices(full_text, target_text):
     # Clean and split texts
-    full_text = re.sub(r"\[.*?\]", "", full_text)
+    full_text = re.sub(r"\[\d*\]|\[|\]", "", full_text)
     full_words = full_text.strip().split()
     target_words = target_text.strip().split()
 
@@ -211,18 +211,30 @@ def split_and_save_audio(audio_path, output_file_path_sentence, splitted_audio_d
 
 
 def construct_new_sentences(
-    files, audio_basename, word_data, sentence_info_path_updated, sentence_path
+                            emphasized_files,
+                            audio_basename, 
+                            word_data,
+                            broll_boundaries,
+                            sentence_info_path_updated,
+                            sentence_path
 ):
     pattern = re.compile(rf'{audio_basename.split(".")[0]}_(\d+)\.txt$')
     # Sort the file paths based on the extracted numeric part
-    files = sorted(files, key=lambda x: int(pattern.search(x).group(1)))
+    emphasized_files = sorted(emphasized_files, key=lambda x: int(pattern.search(x).group(1)))
     with open(sentence_path, "r") as file:
         sentence_content = file.read()
+        
     sentences = sentence_content.split("\n")[:-1]
-
     new_sentences = []
+    start_sent_indexes = set()
+    end_sentence_indexes = set()
 
-    for i, f in tqdm(enumerate(files)):
+    for broll_boundary in broll_boundaries:
+        start_sent_idx, _, end_sent_idx, _ = broll_boundary
+        start_sent_indexes.add(start_sent_idx)
+        end_sentence_indexes.add(end_sent_idx)
+    
+    for i, f in tqdm(enumerate(emphasized_files)):
         with open(f, "r") as file:
             content = file.read()
         times = content.split("\n")
@@ -238,7 +250,20 @@ def construct_new_sentences(
                 #     new_sentence = capitalize_word_by_index(sentences[i], best_match)
                 # else:
                 #     new_sentence = capitalize_word_by_index(new_sentence, best_match)
-        new_s = format_sentence_with_silence(word_data[i], sentences[i])
+        
+        
+        fomatted_words = format_word_with_silence(word_data[i])
+        for j, wrd_info in enumerate(word_data[i]):
+            wrd_info[0] = fomatted_words[j]
+        
+        if i in start_sent_indexes:
+            word_indices_start = [broll[1] for broll in broll_boundaries if broll[0] == i]
+            word_data[i] = format_word_with_opening_paranthesis(word_data[i], word_indices_start)
+        if i in end_sentence_indexes:
+            word_indices_end = [broll[3] for broll in broll_boundaries if broll[2] == i]
+            word_data[i] = format_word_with_closing_paranthesis(word_data[i], word_indices_end)
+        
+        new_s = new_sentence_from_words([word[0] for word in word_data[i]], sentences[i])
         add_sentences_to_file(new_s, sentence_info_path_updated)
         new_sentences.append(new_s + "\n")
 
@@ -311,9 +336,9 @@ def capitalize_word_by_index(sentence, indices):
     return f"{' '.join(words)}|{start_time}|{end_time}"
 
 
-def format_sentence_with_silence(word_timings, sentence):
+def format_word_with_silence(word_timings):
     """
-    Format a sentence with silence indicators based on word timings.
+    Format words data with silence indicators based on word timings.
 
     Args:
         word_timings: List of [word, start, end, silence] lists
@@ -322,9 +347,6 @@ def format_sentence_with_silence(word_timings, sentence):
     Returns:
         Formatted sentence with silence indicators
     """
-    # Remove timing info from original sentence
-    text = sentence.split("|")[0]
-
     # Split into words while preserving punctuation
     formatted_words = []
 
@@ -333,16 +355,55 @@ def format_sentence_with_silence(word_timings, sentence):
 
         # Add silence indicator if there's silence
         if silence > 0:
-            formatted_words.append(f"[{silence:.2f}]{word}")
+            formatted_words.append(f"[{silence:.2f}] {word}")
         else:
             formatted_words.append(word)
+            
+    return formatted_words
 
+def transform_text(input_str, sign):
+    if " " in input_str:
+        # Split by space and insert '[' before the second part
+        parts = input_str.split(" ", 1)
+        return f"{parts[0]} {sign}{parts[1]}"
+    else:
+        # If no space, just add '[' at the beginning
+        return f"[{input_str}"
+
+
+def format_word_with_opening_paranthesis(word_timings, indices):
+    """
+    Format a sentence with silence indicators based on word timings.
+
+    Args:
+        word_timings: List of [word, start, end, silence] lists
+
+    """
+    # Split into words while preserving punctuation
+    for ind in indices:
+        word_timings[ind][0] = transform_text(word_timings[ind][0], "[")
+    return word_timings
+
+def format_word_with_closing_paranthesis(word_timings, indices):
+    """
+    Format a sentence with closing paranthesis based on word timings.
+
+    Args:
+        word_timings: List of [word, start, end, silence] lists
+
+    """
+    # Split into words while preserving punctuation
+    for ind in indices:
+        word_timings[ind][0] = transform_text(word_timings[ind][0], "]")
+    return word_timings
+
+def new_sentence_from_words(words_data, sentence):
     # Reconstruct the sentence
     # Get the start and end times from the original sentence
     _, start_time, end_time = sentence.rsplit("|", 2)
 
     # Join words with spaces and add timing info
-    formatted_sentence = " ".join(formatted_words) + f" |{start_time}|{end_time}"
+    formatted_sentence = " ".join(words_data) + f" |{start_time}|{end_time}"
 
     # Add punctuation
     formatted_sentence = formatted_sentence.replace(" ,", ",")
@@ -360,6 +421,7 @@ def add_sentences_to_file(sentence, filename):
         filename (str): Path to the text file.
     """
     # sentence = add_numbering_to_sentences(sentence, i)
+    
     with open(filename, "a") as file:  # Open the file in append mode
         file.write(sentence + "\n")  # Write each sentence followed by a newline
 
@@ -385,7 +447,7 @@ def split_audio_into_chunks(audio_path: str) -> List[str]:
 
     command = (
         "ffmpeg -i "
-        + audio_path
+        + f'"{audio_path}"'
         + " "
         + "-f segment -segment_times "
         + segments
@@ -409,4 +471,3 @@ def extract_audio(input_video: str, output_audio: str):
     if result.returncode != 0:
         logging.error("Audio extraction failed: %s", result.stderr.decode())
         raise RuntimeError("Failed to extract audio")
-

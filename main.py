@@ -29,6 +29,11 @@ from predictor import ClaudeAdapter
 from zoom_effect import ZoomEffect, process_video
 from dotenv import load_dotenv, find_dotenv
 import warnings
+from queue import Queue
+from concurrent.futures import ThreadPoolExecutor
+from utils.zoom_utils import process_bounding_boxes
+from utils.scene_utils import read_scenes_with_seconds, find_broll_boundaries
+
 
 _ = load_dotenv(find_dotenv())
 
@@ -219,18 +224,34 @@ def main():
             )
 
         # split audios by sentence to predict
+        
+        
+        sentence_times = []
+        for sentence in st.session_state.interview_to_transcription_meta_sentence:
+            pattern = r"\|([0-9.]+)\|([0-9.]+)"
+
+            # Find matches
+            match = re.search(pattern, sentence)
+
+            if match:
+                start_time = float(match.group(1))
+                end_time = float(match.group(2))
+                sentence_times.append((start_time, end_time))
+            else:
+                raise Exception("Sentence must have start and end times")
+        
+        
         splitted_audio_dir = f"./uploaded_files/recordings/splitted_audios/{video_path.split('/')[-1].split('.')[0]}"
         os.makedirs(splitted_audio_dir, exist_ok=True)
 
         split_and_save_audio(
             st.session_state.audio_file, output_file_path_sentence, splitted_audio_dir
         )
-
         # Run emphasis model and change the sentence txt file
         files = glob(f"{splitted_audio_dir}/*.mp3")
         splitted_audio_txt_dir = f"./uploaded_files/emphasis_detection/{video_path.split('/')[-1].split('.')[0]}"
-
-        with st.spinner("Detection of emphasized phrases ..."):
+        
+        with st.spinner("Detection of emphasized phrases..."):
             save_emphasis_predictions(files, splitted_audio_txt_dir)
         
         audio_basename = os.path.basename(st.session_state.audio_file)
@@ -240,18 +261,97 @@ def main():
             st.session_state.interview_to_transcription_meta_words
         )  # json.load(f)
         
+        # 
         add_silence_duration(word_data)
+        
+        # add B-roll detection to the video
+        scenes_splitted_video_path = f'./uploaded_files/recordings/scene_splitted_videos/{video_path.split("/")[-1].split(".")[0]}/'
+        os.makedirs(scenes_splitted_video_path, exist_ok=True)
+        
+        
+        with st.spinner("Detection of separate scenes ..."):
+            if not os.path.exists(scenes_splitted_video_path + f'{video_path.split("/")[-1].split(".")[0]}-Scenes.csv'):
+                os.system(f"python -m scenedetect -i {video_path} detect-content list-scenes -o {scenes_splitted_video_path} split-video -o {scenes_splitted_video_path}")
+
+        with st.spinner("Face Detection for bounding boxes ..."):
+            
+            cap = cv2.VideoCapture(video_path)
+            st.session_state.fps = cap.get(cv2.CAP_PROP_FPS)
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            st.session_state.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) 
+            progress_bar = st.progress(0)
+            
+            output_queue = Queue(maxsize=total_frames)
+            frame_queue = Queue(maxsize=400)
+            status_text = st.empty()
+            with ThreadPoolExecutor(max_workers=16) as executor:
+                executor.submit(process_bounding_boxes, frame_queue, output_queue)
+                frame_count = 0
+                while cap.isOpened():
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+
+                    frame_queue.put((frame_count, frame))
+                    frame_count += 1
+
+                    if frame_count % (total_frames // 20) == 0:
+                        progress_bar.progress(frame_count / total_frames)
+                        status_text.text(f"Processing frame {frame_count}/{total_frames}")
+
+                cap.release()
+                # Signal that no more frames will be added
+                frame_queue.put(None)
+                # Wait for the processing to complete
+                frame_queue.join()
+
+        
+            # processed_scales = {}
+            # processed_centers = {}
+            # frame_face_flags = {}
+            bounding_box_coordinates = {}
+            while not output_queue.empty():
+                frame_count, bounding_box = output_queue.get()
+                if bounding_box is not None:
+                    bounding_box_coordinates[frame_count] = bounding_box
+            
+                
+            scene_path_json = f"./uploaded_files/recordings/scene_splitted_videos/{video_path.split('/')[-1].split('.')[0]}.json"
+            if not os.path.exists( scene_path_json):
+                scenes_data = read_scenes_with_seconds(scenes_splitted_video_path + f'{video_path.split("/")[-1].split(".")[0]}-Scenes.csv')
+                os.makedirs(os.path.dirname(scene_path_json), exist_ok=True)
+                with open(scene_path_json, "w+") as f:
+                    json.dump(scenes_data, f)
+            else:
+                with open(scene_path_json) as f:
+                    scenes_data = json.load(f)
+                    
+            for i, scene in enumerate(scenes_data):
+                scene_count_detected = 0
+                start_frame = int(scene['start_time'] * fps)
+                end_frame = int(scene['end_time'] * fps)
+                for frame_num in range(start_frame, end_frame):
+                    if frame_num in bounding_box_coordinates:
+                        scene_count_detected += 1
+                if scene_count_detected/(end_frame - start_frame) > 0.7:
+                    scenes_data[i]['Broll'] = False
+                else:
+                    scenes_data[i]['Broll']= True
 
         # Change the sentence capitalization
-        files = glob(f"{splitted_audio_txt_dir}/*.txt")
+        emphasis_files = glob(f"{splitted_audio_txt_dir}/*.txt")
         sentence_info_path_updated = output_file_path_sentence.replace(
             ".txt", "_updated.txt"
         )
+        
+        broll_boundaries = find_broll_boundaries(word_data, scenes_data)
 
         new_sentences = construct_new_sentences(
-            files,
+            emphasis_files,
             audio_basename,
             word_data,
+            broll_boundaries, 
             sentence_info_path_updated,
             output_file_path_sentence,
         )

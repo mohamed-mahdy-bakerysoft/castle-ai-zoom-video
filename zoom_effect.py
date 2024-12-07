@@ -168,7 +168,6 @@ def process_video(video_path: str, zoom_effects: List[ZoomEffect]) -> str:
     zoom_scales, processed_centers = process_scales_centers_after_extracting_boundaries(output_queue, zoom_scales, zoom_effects, total_frames, fps)
     cap = cv2.VideoCapture(video_path)
     frame_queue = Queue(maxsize=400)
-    print("process frames worker")
     with ThreadPoolExecutor(max_workers=16) as executor:
         executor.submit(process_frames_worker, frame_queue, out, zoom_scales, processed_centers)
 

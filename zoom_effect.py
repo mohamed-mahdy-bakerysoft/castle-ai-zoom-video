@@ -9,7 +9,6 @@ from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
 import logging
 from utils.audio_text_utils import extract_audio
-from utils.zoom_utils import process_bounding_boxes, process_scales_centers_after_extracting_boundaries, get_initial_zoom_scales
 logging.basicConfig(level=logging.INFO)
 
 
@@ -112,7 +111,7 @@ def process_frames_worker(frame_queue, out, zoom_scales, processed_centers):
 
 
 
-def process_video(video_path: str, zoom_effects: List[ZoomEffect]) -> str:
+def process_video(video_path: str, zoom_scales, processed_centers) -> str:
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -139,34 +138,34 @@ def process_video(video_path: str, zoom_effects: List[ZoomEffect]) -> str:
     if not out.isOpened():
         raise RuntimeError("Failed to initialize video writer")
 
-    zoom_scales = get_initial_zoom_scales(total_frames, fps, zoom_effects)
+    # zoom_scales = get_initial_zoom_scales(total_frames, fps, zoom_effects)
     progress_bar = st.progress(0)
-    output_queue = Queue(maxsize=total_frames)
-    frame_queue = Queue(maxsize=400)
+    # output_queue = Queue(maxsize=total_frames)
+    # frame_queue = Queue(maxsize=400)
 
-    with ThreadPoolExecutor(max_workers=16) as executor:
-        executor.submit(process_bounding_boxes, frame_queue, output_queue, zoom_scales)
-        frame_count = 0
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
+    # with ThreadPoolExecutor(max_workers=16) as executor:
+    #     executor.submit(process_bounding_boxes, frame_queue, output_queue, zoom_scales)
+    #     frame_count = 0
+    #     while cap.isOpened():
+    #         ret, frame = cap.read()
+    #         if not ret:
+    #             break
 
-            frame_queue.put((frame_count, frame))
-            frame_count += 1
+    #         frame_queue.put((frame_count, frame))
+    #         frame_count += 1
 
-            if frame_count % (total_frames // 20) == 0:
-                progress_bar.progress(frame_count / total_frames)
-                status_text.text(f"Processing frame {frame_count}/{total_frames}")
+    #         if frame_count % (total_frames // 20) == 0:
+    #             progress_bar.progress(frame_count / total_frames)
+    #             status_text.text(f"Processing frame {frame_count}/{total_frames}")
 
-        cap.release()
-        # Signal that no more frames will be added
-        frame_queue.put(None)
-        # Wait for the processing to complete
-        frame_queue.join()
+    #     cap.release()
+    #     # Signal that no more frames will be added
+    #     frame_queue.put(None)
+    #     # Wait for the processing to complete
+    #     frame_queue.join()
 
-    zoom_scales, processed_centers = process_scales_centers_after_extracting_boundaries(output_queue, zoom_scales, zoom_effects, total_frames, fps)
-    cap = cv2.VideoCapture(video_path)
+    # zoom_scales, processed_centers = process_scales_centers_after_extracting_boundaries(output_queue, zoom_scales, zoom_effects, total_frames, fps)
+    # cap = cv2.VideoCapture(video_path)
     frame_queue = Queue(maxsize=400)
     with ThreadPoolExecutor(max_workers=16) as executor:
         executor.submit(process_frames_worker, frame_queue, out, zoom_scales, processed_centers)

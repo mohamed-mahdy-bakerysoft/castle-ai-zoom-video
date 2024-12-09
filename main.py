@@ -29,10 +29,9 @@ from predictor import ClaudeAdapter
 from zoom_effect import ZoomEffect, process_video
 from dotenv import load_dotenv, find_dotenv
 import warnings
-from queue import Queue
-from concurrent.futures import ThreadPoolExecutor
-from utils.zoom_utils import process_bounding_boxes
+from utils.zoom_utils import process_zoom_scales_centers_after_extracting_boundaries
 from utils.scene_utils import read_scenes_with_seconds, find_broll_boundaries
+from face_bounding_box_detection import get_bounding_box_coordinates
 
 
 _ = load_dotenv(find_dotenv())
@@ -43,7 +42,7 @@ st.set_option("deprecation.showfileUploaderEncoding", False)
 warnings.filterwarnings("ignore")
 
 SPLIT_SENTENCE_BY_DURATION = 240 * 7
-ZOOM_DURATION = 0.7
+ZOOM_DURATION = 1
 
 
 # Set up logging configuration
@@ -179,6 +178,12 @@ def main():
 
         # Save uploaded file
         video_path = str(temp_dir / uploaded_file.name)
+        cap = cv2.VideoCapture(video_path)
+        st.session_state.fps = cap.get(cv2.CAP_PROP_FPS)
+        st.session_state.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        st.session_state.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        st.session_state.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) 
+    
         with open(video_path, "wb") as f:
             f.write(uploaded_file.read())
 
@@ -226,19 +231,19 @@ def main():
         # split audios by sentence to predict
         
         
-        sentence_times = []
-        for sentence in st.session_state.interview_to_transcription_meta_sentence:
-            pattern = r"\|([0-9.]+)\|([0-9.]+)"
+        # sentence_times = []
+        # for sentence in st.session_state.interview_to_transcription_meta_sentence:
+        #     pattern = r"\|([0-9.]+)\|([0-9.]+)"
 
-            # Find matches
-            match = re.search(pattern, sentence)
+        #     # Find matches
+        #     match = re.search(pattern, sentence)
 
-            if match:
-                start_time = float(match.group(1))
-                end_time = float(match.group(2))
-                sentence_times.append((start_time, end_time))
-            else:
-                raise Exception("Sentence must have start and end times")
+        #     if match:
+        #         start_time = float(match.group(1))
+        #         end_time = float(match.group(2))
+        #         sentence_times.append((start_time, end_time))
+        #     else:
+        #         raise Exception("Sentence must have start and end times")
         
         
         splitted_audio_dir = f"./uploaded_files/recordings/splitted_audios/{video_path.split('/')[-1].split('.')[0]}"
@@ -273,94 +278,54 @@ def main():
             if not os.path.exists(scenes_splitted_video_path + f'{video_path.split("/")[-1].split(".")[0]}-Scenes.csv'):
                 os.system(f"python -m scenedetect -i {video_path} detect-content list-scenes -o {scenes_splitted_video_path} split-video -o {scenes_splitted_video_path}")
 
-        with st.spinner("Face Detection for bounding boxes ..."):
-            
-            cap = cv2.VideoCapture(video_path)
-            st.session_state.fps = cap.get(cv2.CAP_PROP_FPS)
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            st.session_state.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) 
-            progress_bar = st.progress(0)
-            
-            output_queue = Queue(maxsize=total_frames)
-            frame_queue = Queue(maxsize=400)
-            status_text = st.empty()
-            with ThreadPoolExecutor(max_workers=16) as executor:
-                executor.submit(process_bounding_boxes, frame_queue, output_queue)
-                frame_count = 0
-                while cap.isOpened():
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-
-                    frame_queue.put((frame_count, frame))
-                    frame_count += 1
-
-                    if frame_count % (total_frames // 20) == 0:
-                        progress_bar.progress(frame_count / total_frames)
-                        status_text.text(f"Processing frame {frame_count}/{total_frames}")
-
-                cap.release()
-                # Signal that no more frames will be added
-                frame_queue.put(None)
-                # Wait for the processing to complete
-                frame_queue.join()
-
-        
-            # processed_scales = {}
-            # processed_centers = {}
-            # frame_face_flags = {}
-            bounding_box_coordinates = {}
-            while not output_queue.empty():
-                frame_count, bounding_box = output_queue.get()
-                if bounding_box is not None:
-                    bounding_box_coordinates[frame_count] = bounding_box
-            
-                
-            scene_path_json = f"./uploaded_files/recordings/scene_splitted_videos/{video_path.split('/')[-1].split('.')[0]}.json"
-            if not os.path.exists( scene_path_json):
-                scenes_data = read_scenes_with_seconds(scenes_splitted_video_path + f'{video_path.split("/")[-1].split(".")[0]}-Scenes.csv')
-                os.makedirs(os.path.dirname(scene_path_json), exist_ok=True)
-                with open(scene_path_json, "w+") as f:
-                    json.dump(scenes_data, f)
-            else:
-                with open(scene_path_json) as f:
-                    scenes_data = json.load(f)
-                    
-            for i, scene in enumerate(scenes_data):
-                scene_count_detected = 0
-                start_frame = int(scene['start_time'] * fps)
-                end_frame = int(scene['end_time'] * fps)
-                for frame_num in range(start_frame, end_frame):
-                    if frame_num in bounding_box_coordinates:
-                        scene_count_detected += 1
-                if scene_count_detected/(end_frame - start_frame) > 0.7:
-                    scenes_data[i]['Broll'] = False
+        if not st.session_state.get("face_detected", False):
+            with st.spinner("Face Detection for bounding boxes ..."):
+                st.session_state.face_detected = True
+                st.session_state.bounding_box_coordinates = get_bounding_box_coordinates(video_path)
+                scene_path_json = f"./uploaded_files/recordings/scene_splitted_videos/{video_path.split('/')[-1].split('.')[0]}.json"
+                if not os.path.exists( scene_path_json):
+                    scenes_data = read_scenes_with_seconds(scenes_splitted_video_path + f'{video_path.split("/")[-1].split(".")[0]}-Scenes.csv')
+                    os.makedirs(os.path.dirname(scene_path_json), exist_ok=True)
+                    with open(scene_path_json, "w+") as f:
+                        json.dump(scenes_data, f)
                 else:
-                    scenes_data[i]['Broll']= True
+                    with open(scene_path_json) as f:
+                        scenes_data = json.load(f)
+                        
+                for i, scene in enumerate(scenes_data):
+                    scene_count_detected = 0
+                    start_frame = int(scene['start_time'] * st.session_state.fps)
+                    end_frame = int(scene['end_time'] * st.session_state.fps)
+                    for frame_num in range(start_frame, end_frame):
+                        if st.session_state.bounding_box_coordinates[frame_num] is not None:
+                            scene_count_detected += 1
+                    if scene_count_detected/(end_frame - start_frame) > 0.7:
+                        scenes_data[i]['Broll'] = False
+                    else:
+                        scenes_data[i]['Broll']= True
 
-        # Change the sentence capitalization
-        emphasis_files = glob(f"{splitted_audio_txt_dir}/*.txt")
-        sentence_info_path_updated = output_file_path_sentence.replace(
-            ".txt", "_updated.txt"
-        )
-        
-        broll_boundaries = find_broll_boundaries(word_data, scenes_data)
+                # Change the sentence capitalization
+                emphasis_files = glob(f"{splitted_audio_txt_dir}/*.txt")
+                sentence_info_path_updated = output_file_path_sentence.replace(
+                    ".txt", "_updated.txt"
+                )
+                
+                broll_boundaries = find_broll_boundaries(word_data, scenes_data)
 
-        new_sentences = construct_new_sentences(
-            emphasis_files,
-            audio_basename,
-            word_data,
-            broll_boundaries, 
-            sentence_info_path_updated,
-            output_file_path_sentence,
-        )
-        numbered_txt_file = sentence_info_path_updated.replace(
-            "_updated.txt", "_updated_numbered.txt"
-        )
-        if not os.path.exists(numbered_txt_file):
-            for i, sent in enumerate(new_sentences):
-                add_sentences_to_file(f"{i}. {sent}", numbered_txt_file)
+                st.session_state.new_sentences = construct_new_sentences(
+                    emphasis_files,
+                    audio_basename,
+                    word_data,
+                    broll_boundaries, 
+                    sentence_info_path_updated,
+                    output_file_path_sentence,
+                )
+                numbered_txt_file = sentence_info_path_updated.replace(
+                    "_updated.txt", "_updated_numbered.txt"
+                )
+                if not os.path.exists(numbered_txt_file):
+                    for i, sent in enumerate(st.session_state.new_sentences):
+                        add_sentences_to_file(f"{i}. {sent}", numbered_txt_file)
 
         # ChatGPT predictions
         # if st.button("GPT Predictions"):
@@ -412,7 +377,7 @@ def main():
 
             os.makedirs("claude_results", exist_ok=True)
             st.session_state.sentences_splitted_by_duration = (
-                split_sentences_by_seconds(new_sentences, SPLIT_SENTENCE_BY_DURATION)
+                split_sentences_by_seconds(st.session_state.new_sentences, SPLIT_SENTENCE_BY_DURATION)
             )
             st.session_state.splitted_words = split_words_by_duration(
                 word_data,
@@ -475,8 +440,16 @@ def main():
                         jumpcut=True,
                         hold=True,
                     )
+                    zoom_scales, processed_centers = process_zoom_scales_centers_after_extracting_boundaries(
+                        st.session_state.zoom_effects,
+                        st.session_state.total_frames,
+                        st.session_state.fps,
+                        st.session_state.height,
+                        st.session_state.width,
+                        st.session_state.bounding_box_coordinates
+                    )
                     st.session_state.output_path = process_video(
-                        video_path, st.session_state.zoom_effects
+                        video_path, zoom_scales, processed_centers
                     )
                     st.session_state.button_clicked = None
             except Exception as e:

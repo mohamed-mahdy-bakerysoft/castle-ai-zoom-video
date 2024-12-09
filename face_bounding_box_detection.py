@@ -1,10 +1,16 @@
 import mediapipe as mp
 import cv2
-
+import streamlit as st
 mp_face_detection = mp.solutions.face_detection
 face_detection = mp_face_detection.FaceDetection(
     model_selection=0, min_detection_confidence=0.5
 )
+from concurrent.futures import ThreadPoolExecutor
+from queue import Queue
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
 HEIGHT_PADDING = 0.2
 WIDTH_PADDING = 0.3
 
@@ -80,3 +86,67 @@ def get_bounding_box(frame):
             return (x, y, w, h)#min_scale, center_x, center_y, True
     else:
         return None
+
+
+def process_bounding_boxes(frame_queue, output_queue):
+    while True:
+        try:
+            frame_data = frame_queue.get()
+            if frame_data is None:
+                frame_queue.task_done()
+                break  # Exit loop when sentinel is received
+
+            frame_count, frame = frame_data
+            coordinates = get_bounding_box(frame)
+            # if current_scale != 1.0:
+            output_queue.put(
+                (
+                    frame_count,
+                    coordinates
+                    )
+            )
+            frame_queue.task_done()
+
+        except Exception as e:
+            logging.error(f"Error processing frame: {e}")
+            frame_queue.task_done()  # Ensure task_done is called even in case of error
+
+
+def get_bounding_box_coordinates(video_path):
+    cap = cv2.VideoCapture(video_path)
+    progress_bar = st.progress(0)
+
+    output_queue = Queue(maxsize=st.session_state.total_frames)
+    frame_queue = Queue(maxsize=400)
+    status_text = st.empty()
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        executor.submit(process_bounding_boxes, frame_queue, output_queue)
+        frame_count = 0
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            frame_queue.put((frame_count, frame))
+            frame_count += 1
+
+            if frame_count % (st.session_state.total_frames // 20) == 0:
+                progress_bar.progress(frame_count / st.session_state.total_frames)
+                status_text.text(f"Processing frame {frame_count}/{st.session_state.total_frames}")
+
+        cap.release()
+        # Signal that no more frames will be added
+        frame_queue.put(None)
+        # Wait for the processing to complete
+        frame_queue.join()
+
+
+    # processed_scales = {}
+    # processed_centers = {}
+    # frame_face_flags = {}
+    bounding_box_coordinates = {}
+    while not output_queue.empty():
+        frame_count, bounding_box = output_queue.get()
+        bounding_box_coordinates[frame_count] = bounding_box
+            
+    return bounding_box_coordinates

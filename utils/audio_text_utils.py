@@ -361,14 +361,20 @@ def format_word_with_silence(word_timings):
             
     return formatted_words
 
-def transform_text(input_str, sign):
+def transform_text(input_str, sign, end=True):
     if " " in input_str:
         # Split by space and insert '[' before the second part
         parts = input_str.split(" ", 1)
-        return f"{parts[0]} {sign}{parts[1]}"
+        if not end:
+            return f"{parts[0]} {sign}{parts[1]}"
+        else:
+            return f"{parts[0]} {parts[1]}{sign}"
     else:
         # If no space, just add '[' at the beginning
-        return f"[{input_str}"
+        if end:
+            return f"{input_str}{sign}"
+        else:
+            return f"{sign}{input_str}"
 
 
 def format_word_with_opening_paranthesis(word_timings, indices):
@@ -394,7 +400,7 @@ def format_word_with_closing_paranthesis(word_timings, indices):
     """
     # Split into words while preserving punctuation
     for ind in indices:
-        word_timings[ind][0] = transform_text(word_timings[ind][0], "]")
+        word_timings[ind][0] = transform_text(word_timings[ind][0], "]", end=True)
     return word_timings
 
 def new_sentence_from_words(words_data, sentence):

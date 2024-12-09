@@ -25,9 +25,9 @@ def process_scales_centers_after_extracting_boundaries(
     # get the minimum scale for holding in that position
     min_zoom_keys_per_effect = {}
     for i, effect in enumerate(zoom_effects):
-        start_frame = int(effect.start_time * fps)
-        start_frame = start_frame + int(effect.zoom_in_duration * fps)
-        end_frame = min(total_frames, start_frame + int(effect.total_duration * fps))
+        start_frame_init = int(effect.start_time * fps)
+        start_frame = start_frame_init + int(effect.zoom_in_duration * fps)
+        end_frame = min(total_frames, start_frame_init + int(effect.total_duration * fps))
         values = [(key, processed_scales[key]) for key in range(start_frame, end_frame)]
         min_zoom_key, min_zoom_scale = min(values, key=lambda x: x[1])
         for frame_num in range(start_frame, end_frame):

@@ -25,7 +25,7 @@ from utils.audio_text_utils import (
 )
 from utils.emphasess_utils import save_emphasis_predictions
 import json
-from predictor import ClaudeAdapter
+from predictor import ClaudeAdapter, GPTAdapter
 from zoom_effect import ZoomEffect, process_video
 from dotenv import load_dotenv, find_dotenv
 import warnings
@@ -41,8 +41,8 @@ _ = load_dotenv(find_dotenv())
 st.set_option("deprecation.showfileUploaderEncoding", False)
 warnings.filterwarnings("ignore")
 
-SPLIT_SENTENCE_BY_DURATION = 240 * 7
-ZOOM_DURATION = 1
+SPLIT_SENTENCE_BY_DURATION = 240 * 12
+ZOOM_DURATION = 0.7
 
 
 # Set up logging configuration
@@ -118,10 +118,10 @@ def get_zooms_claude(
 
             # zoom_out_duration = p['zoom_out_duration']
             st_idx, end_idx = get_word_indices(
-                sntnces_splitted_by_duration[i][sentence_num - 1], text_applied
+                sntnces_splitted_by_duration[i][sentence_num], text_applied
             )
             st_idx_cut, end_idx_cut = get_word_indices(
-                sntnces_splitted_by_duration[i][transition_sentence_num - 1],
+                sntnces_splitted_by_duration[i][transition_sentence_num],
                 transition_sentence_word,
             )
 
@@ -129,10 +129,12 @@ def get_zooms_claude(
                 continue
             if st_idx_cut == -1 or end_idx_cut == -1:
                 continue
-            start_time = splittedwords[i][sentence_num - 1][st_idx][1]
-            end_time = splittedwords[i][transition_sentence_num - 1][st_idx_cut][1]
+            start_time = splittedwords[i][sentence_num][st_idx][1]
+            end_time = splittedwords[i][transition_sentence_num][st_idx_cut][1]
 
             if not slow and jumpcut and hold:
+                if end_time-start_time < zoom_duration:
+                    continue
                 zoom_effects.append(
                     ZoomEffect(start_time, end_time, zoom_duration, zoom_in_scale, 0)
                 )
@@ -278,86 +280,82 @@ def main():
             if not os.path.exists(scenes_splitted_video_path + f'{video_path.split("/")[-1].split(".")[0]}-Scenes.csv'):
                 os.system(f"python -m scenedetect -i {video_path} detect-content list-scenes -o {scenes_splitted_video_path} split-video -o {scenes_splitted_video_path}")
 
-        if not st.session_state.get("face_detected", False):
-            with st.spinner("Face Detection for bounding boxes ..."):
-                st.session_state.face_detected = True
-                st.session_state.bounding_box_coordinates = get_bounding_box_coordinates(video_path)
-                scene_path_json = f"./uploaded_files/recordings/scene_splitted_videos/{video_path.split('/')[-1].split('.')[0]}.json"
-                if not os.path.exists( scene_path_json):
-                    scenes_data = read_scenes_with_seconds(scenes_splitted_video_path + f'{video_path.split("/")[-1].split(".")[0]}-Scenes.csv')
-                    os.makedirs(os.path.dirname(scene_path_json), exist_ok=True)
-                    with open(scene_path_json, "w+") as f:
-                        json.dump(scenes_data, f)
-                else:
-                    with open(scene_path_json) as f:
-                        scenes_data = json.load(f)
-                        
-                for i, scene in enumerate(scenes_data):
-                    scene_count_detected = 0
-                    start_frame = int(scene['start_time'] * st.session_state.fps)
-                    end_frame = int(scene['end_time'] * st.session_state.fps)
-                    for frame_num in range(start_frame, end_frame):
-                        if st.session_state.bounding_box_coordinates[frame_num] is not None:
-                            scene_count_detected += 1
-                    if scene_count_detected/(end_frame - start_frame) > 0.7:
-                        scenes_data[i]['Broll'] = False
-                    else:
-                        scenes_data[i]['Broll']= True
+        bounding_boxes_path =  './uploaded_files/recordings/face_detected_bounding_boxes/'
+        os.makedirs(bounding_boxes_path, exist_ok=True)
+        if os.path.exists(f'{bounding_boxes_path}/{video_path.split("/")[-1].split(".")[0]}.json'):
+            with open(f'{bounding_boxes_path}/{video_path.split("/")[-1].split(".")[0]}.json') as f:
+                bounding_box_coordinates = {int(key): tuple(value) if value is not None else None for key, value in json.load(f).items()}
+                st.session_state.total_frames  = len(bounding_box_coordinates)
+        else:  
+            if not st.session_state.get("face_detected", False):
+                with st.spinner("Face Detection for bounding boxes ..."):
+                    st.session_state.face_detected = True
+                    bounding_box_coordinates = get_bounding_box_coordinates(video_path)
+                    st.session_state.total_frames  = len(bounding_box_coordinates)
+                    json_compatible_bounding_box_data = {str(key): (list(value) if value is not None else None) for key, value in bounding_box_coordinates.items()}
+                    with open(f'{bounding_boxes_path}/{video_path.split("/")[-1].split(".")[0]}.json', 'w') as json_file:
+                        json.dump(json_compatible_bounding_box_data, json_file, indent=4)
 
-                # Change the sentence capitalization
-                emphasis_files = glob(f"{splitted_audio_txt_dir}/*.txt")
-                sentence_info_path_updated = output_file_path_sentence.replace(
-                    ".txt", "_updated.txt"
-                )
+        scene_path_json = f"./uploaded_files/recordings/scene_splitted_videos/{video_path.split('/')[-1].split('.')[0]}.json"
+        if not os.path.exists( scene_path_json):
+            scenes_data = read_scenes_with_seconds(scenes_splitted_video_path + f'{video_path.split("/")[-1].split(".")[0]}-Scenes.csv')
+            os.makedirs(os.path.dirname(scene_path_json), exist_ok=True)
+            with open(scene_path_json, "w+") as f:
+                json.dump(scenes_data, f)
+        else:
+            with open(scene_path_json) as f:
+                scenes_data = json.load(f)
                 
-                broll_boundaries = find_broll_boundaries(word_data, scenes_data)
+        for i, scene in enumerate(scenes_data):
+            scene_count_detected = 0
+            start_frame = int(scene['start_time'] * st.session_state.fps)
+            end_frame = int(scene['end_time'] * st.session_state.fps)
+            for frame_num in range(start_frame, end_frame):
+                if bounding_box_coordinates[frame_num] is not None:
+                    scene_count_detected += 1
+            if end_frame - start_frame == 0:
+                scenes_data[i]['Broll'] = False
+            if scene_count_detected/(end_frame - start_frame) > 0.7:
+                scenes_data[i]['Broll'] = False
+            else:
+                scenes_data[i]['Broll']= True
 
-                st.session_state.new_sentences = construct_new_sentences(
-                    emphasis_files,
-                    audio_basename,
-                    word_data,
-                    broll_boundaries, 
-                    sentence_info_path_updated,
-                    output_file_path_sentence,
-                )
-                numbered_txt_file = sentence_info_path_updated.replace(
-                    "_updated.txt", "_updated_numbered.txt"
-                )
-                if not os.path.exists(numbered_txt_file):
-                    for i, sent in enumerate(st.session_state.new_sentences):
-                        add_sentences_to_file(f"{i}. {sent}", numbered_txt_file)
+        # Change the sentence capitalization
+        emphasis_files = glob(f"{splitted_audio_txt_dir}/*.txt")
+        sentence_info_path_updated = output_file_path_sentence.replace(
+            ".txt", "_updated.txt"
+        )
+        
+        broll_boundaries = find_broll_boundaries(word_data, scenes_data)
 
-        # ChatGPT predictions
-        # if st.button("GPT Predictions"):
-        #     print("No any gpt predictions")
-        #     sentences_splitted_by_duration = split_sentences_by_seconds(st.session_state.interview_to_transcription_meta_sentence, SPLIT_SENTENCE_BY_DURATION )
-        #     splitted_words = split_words_by_duration(st.session_state.interview_to_transcription_meta_words, [len(sen) for sen in sentences_splitted_by_duration] )
-        #     splitted_sentences = [[f"{i}. {sentence}" for i, sentence in enumerate(sentences, start=1)] for sentences in sentences_splitted_by_duration]
+        st.session_state.new_sentences = construct_new_sentences(
+            emphasis_files,
+            audio_basename,
+            word_data,
+            broll_boundaries, 
+            sentence_info_path_updated,
+            output_file_path_sentence,
+        )
+        numbered_txt_file = sentence_info_path_updated.replace(
+            "_updated.txt", "_updated_numbered.txt"
+        )
+        if not os.path.exists(numbered_txt_file):
+            for i, sent in enumerate(st.session_state.new_sentences):
+                add_sentences_to_file(f"{i}. {sent}", numbered_txt_file)
 
-        #     predictor = GPTAdapter(model="gpt-4o",
-        #                            api_key=os.get_env("OPENAI_API_KEY"))
-
-        #     os.makedirs("gpt_results", exist_ok=True)
-        #     zoom_effects = []
-
-        #     # Construct the JSON file path
-        #     audio_file_name = st.session_state.audio_file.split('/')[-1].split('.')[0]
-        #     json_file_path = f"gpt_results/{audio_file_name}.json"
-
-        #     # Check if predictions already exist
-        #     if not os.path.exists(json_file_path):
-        #         # Generate predictions using GPT predictor
-        #         predictions = predictor.get_predictions(splitted_sentences)
-        #         # Save predictions to a JSON file
-        #         with open(json_file_path, "w") as f:
-        #             json.dump(predictions, f)
-        #         st.success(f"Predictions saved to {json_file_path}")
-        #     else:
-        #         # Load existing predictions
-        #         with open(json_file_path, "r") as f:
-        #             predictions = json.load(f)
-        #         st.info(f"Loaded existing predictions from {json_file_path}")
-
+        
+        st.session_state.sentences_splitted_by_duration = (
+                split_sentences_by_seconds(st.session_state.new_sentences, SPLIT_SENTENCE_BY_DURATION)
+            )
+        st.session_state.splitted_words = split_words_by_duration(
+            word_data,
+            [len(sen) for sen in st.session_state.sentences_splitted_by_duration],
+        )
+        splitted_sentences = [
+            [f"{i}. {sentence}" for i, sentence in enumerate(sentences, start=0)]
+            for sentences in st.session_state.sentences_splitted_by_duration
+        ]
+        
         if "button_clicked" not in st.session_state:
             st.session_state.button_clicked = None
         if "predictions" not in st.session_state:
@@ -366,43 +364,87 @@ def main():
             st.session_state.zoom_effects = None
         if "output_path" not in st.session_state:
             st.session_state.output_path = None
-        # st.write(st.session_state)
+            
+        col1, col2 = st.columns(2)
+        #ChatGPT predictions
+        with col1:
+            if st.button("GPT Predictions"):
+                # sentences_splitted_by_duration = split_sentences_by_seconds(st.session_state.interview_to_transcription_meta_sentence, SPLIT_SENTENCE_BY_DURATION )
+                # splitted_words = split_words_by_duration(st.session_state.interview_to_transcription_meta_words, [len(sen) for sen in sentences_splitted_by_duration] )
+                # splitted_sentences = [[f"{i}. {sentence}" for i, sentence in enumerate(sentences, start=1)] for sentences in sentences_splitted_by_duration]
 
-        if st.button("Claude Predictions"):
-            st.session_state.button_clicked = "claude_predictions"
-            predictor = ClaudeAdapter(
-                model_name="claude-3-5-sonnet-20241022",
-                api_key=os.getenv("ANTHROPIC_API_KEY"),
-            )
+                predictor = GPTAdapter(model_name="gpt-4o",api_key=os.getenv("OPENAI_API_KEY"))
 
-            os.makedirs("claude_results", exist_ok=True)
-            st.session_state.sentences_splitted_by_duration = (
-                split_sentences_by_seconds(st.session_state.new_sentences, SPLIT_SENTENCE_BY_DURATION)
-            )
-            st.session_state.splitted_words = split_words_by_duration(
-                word_data,
-                [len(sen) for sen in st.session_state.sentences_splitted_by_duration],
-            )
-            splitted_sentences = [
-                [f"{i}. {sentence}" for i, sentence in enumerate(sentences, start=1)]
-                for sentences in st.session_state.sentences_splitted_by_duration
-            ]
+                os.makedirs("gpt_results", exist_ok=True)
 
-            # Construct the JSON file path
-            audio_file_name = st.session_state.audio_file.split("/")[-1].split(".")[0]
-            json_file_path = f"claude_results/{audio_file_name}.json"
-            if not os.path.exists(json_file_path):
-                with st.spinner("Predicting zoom points..."):
-                    st.session_state.predictions = predictor.get_predictions(
-                        splitted_sentences, num_inputs=len(splitted_sentences)
-                    )
+                # Construct the JSON file path
+                audio_file_name = st.session_state.audio_file.split('/')[-1].split('.')[0]
+                json_file_path = f"gpt_results/{audio_file_name}.json"
+
+                # Check if predictions already exist
+                if not os.path.exists(json_file_path):
+                    # Generate predictions using GPT predictor
+                    st.session_state.predictions = predictor.get_predictions(splitted_sentences)
+                    # Save predictions to a JSON file
                     with open(json_file_path, "w") as f:
                         json.dump(st.session_state.predictions, f)
-                st.success(f"Predictions saved to {json_file_path}")
-            else:
-                with open(json_file_path, "r") as f:
-                    st.session_state.predictions = json.load(f)
-                st.info(f"Loaded existing predictions from {json_file_path}")
+                    st.success(f"Predictions saved to {json_file_path}")
+                else:
+                    # Load existing predictions
+                    with open(json_file_path, "r") as f:
+                        st.session_state.predictions = json.load(f)
+                    st.info(f"Loaded existing predictions from {json_file_path}")
+
+        
+        # st.write(st.session_state)
+        with col2:
+            if st.button("Claude Predictions"):
+                st.session_state.button_clicked = "claude_predictions"
+                predictor = ClaudeAdapter(
+                    model_name="claude-3-5-sonnet-20241022",
+                    api_key=os.getenv("ANTHROPIC_API_KEY"),
+                )
+                os.makedirs("claude_results", exist_ok=True)
+                # st.session_state.sentences_splitted_by_duration = (
+                #     split_sentences_by_seconds(st.session_state.new_sentences, SPLIT_SENTENCE_BY_DURATION)
+                # )
+                # st.session_state.splitted_words = split_words_by_duration(
+                #     word_data,
+                #     [len(sen) for sen in st.session_state.sentences_splitted_by_duration],
+                # )
+                # splitted_sentences = [
+                #     [f"{i}. {sentence}" for i, sentence in enumerate(sentences, start=1)]
+                #     for sentences in st.session_state.sentences_splitted_by_duration
+                # ]
+
+                # os.makedirs("claude_results", exist_ok=True)  
+                # st.session_state.sentences_splitted_by_duration = (
+                #     split_sentences_by_seconds(st.session_state.new_sentences, SPLIT_SENTENCE_BY_DURATION)
+                # )
+                # st.session_state.splitted_words = split_words_by_duration(
+                #     word_data,
+                #     [len(sen) for sen in st.session_state.sentences_splitted_by_duration],
+                # )
+                # splitted_sentences = [
+                #     [f"{i}. {sentence}" for i, sentence in enumerate(sentences, start=1)]
+                #     for sentences in st.session_state.sentences_splitted_by_duration
+                # ]
+
+                    # Construct the JSON file path
+                audio_file_name = st.session_state.audio_file.split("/")[-1].split(".")[0]
+                json_file_path = f"claude_results/{audio_file_name}.json"
+                if not os.path.exists(json_file_path):
+                    with st.spinner("Predicting zoom points..."):
+                        st.session_state.predictions = predictor.get_predictions(
+                            splitted_sentences, num_inputs=len(splitted_sentences)
+                        )
+                        with open(json_file_path, "w") as f:
+                            json.dump(st.session_state.predictions, f)
+                    st.success(f"Predictions saved to {json_file_path}")
+                else:
+                    with open(json_file_path, "r") as f:
+                        st.session_state.predictions = json.load(f)
+                    st.info(f"Loaded existing predictions from {json_file_path}")
             # st.session_state.predictions = predictions
 
         if st.session_state.predictions:
@@ -430,8 +472,8 @@ def main():
         if st.session_state.button_clicked == "fast_zoom_hold_cut":
             st.write("Fast Zoom In-Hold-Cut clicked!")
             try:
-                with st.spinner("Processing video zooms..."):
-                    st.session_state.zoom_effects = get_zooms_claude(
+                with st.spinner("Getting zooms from  claude..."):
+                    zoom_effects = get_zooms_claude(
                         st.session_state.predictions,
                         st.session_state.sentences_splitted_by_duration,
                         st.session_state.splitted_words,
@@ -440,20 +482,31 @@ def main():
                         jumpcut=True,
                         hold=True,
                     )
+                    st.session_state.zoom_in_times = []
+                    for effect in zoom_effects:
+                        st.session_state.zoom_in_times.append(
+                            f"{int(effect.start_time//60)}m{int(effect.start_time%60)}s"
+                        )
+            
+                
+                with st.spinner("Process zooms after face detection ..."):
                     zoom_scales, processed_centers = process_zoom_scales_centers_after_extracting_boundaries(
-                        st.session_state.zoom_effects,
+                        zoom_effects,
                         st.session_state.total_frames,
                         st.session_state.fps,
                         st.session_state.height,
                         st.session_state.width,
-                        st.session_state.bounding_box_coordinates
+                        bounding_box_coordinates
                     )
+                with st.spinner("Process video..."):
                     st.session_state.output_path = process_video(
                         video_path, zoom_scales, processed_centers
                     )
                     st.session_state.button_clicked = None
+                    
             except Exception as e:
                 st.error(f"An error occurred during processing: {str(e)}")
+
 
         if st.session_state.zoom_effects:
             zoom_in_times = []
@@ -462,11 +515,26 @@ def main():
                     f"{int(effect.start_time//60)}m{int(effect.start_time%60)}s"
                 )
 
+                
+        if st.session_state.zoom_effects:
+            zoom_in_times = []
+            for effect in st.session_state.zoom_effects:
+                zoom_in_times.append(
+                    f"{int(effect.start_time//60)}m{int(effect.start_time%60)}s"
+                )
+
         if st.session_state.output_path:
+            
+            # zoom_in_times = []
+            # for effect in zoom_effects:
+            #     zoom_in_times.append(
+            #         f"{int(effect.start_time//60)}m{int(effect.start_time%60)}s"
+            #     )
+            
             # Your time selection logic
             selected_time = st.selectbox(
                 "Select a Zoom-in Start Time (or leave empty to play as it is):",
-                options=["Play as it is"] + zoom_in_times,
+                options=["Play as it is"] + st.session_state.zoom_in_times,
             )
 
             # Convert selected time to seconds
@@ -497,10 +565,41 @@ def main():
                     </script>
                 </div>
             """
-
-            # Render the component
             components.html(html_code, height=400)
 
 
 if __name__ == "__main__":
     main()
+    
+# selected_time = st.selectbox(
+#                 "Select a Zoom-in Start Time (or leave empty to play as it is):",
+#                 options=["Play as it is"] + ["0m17s"],
+#             )
+
+# selected_seconds = None
+# if selected_time != "Play as it is":
+#     minutes, seconds = map(int, selected_time[:-1].split("m"))
+#     selected_seconds = minutes * 60 + seconds
+
+# video_path = f"temp_output/output_pod_vid_0.mp4"
+#         # Create custom HTML component with seek functionality
+# video_file = open(video_path, "rb").read()
+# video_b64 = base64.b64encode(video_file).decode('utf-8')  # Convert to base64
+
+# html_code = f"""
+#     <div style="width: 100%; height: 100%;">
+#         <video id="videoPlayer" width="100%" height="100%" controls>
+#             <source src="data:video/mp4;base64,{video_b64}" type="video/mp4">
+#             Your browser does not support the video tag.
+#         </video>
+#         <script>
+#             var video = document.getElementById('videoPlayer');
+#             video.addEventListener('loadedmetadata', function() {{
+#                 console.log('Video metadata loaded');
+#                 video.currentTime = {selected_seconds};  // Set start time
+#                 console.log('Starting video at:', {selected_seconds});
+#             }});
+#         </script>
+#     </div>
+# """
+# components.html(html_code, height=400)

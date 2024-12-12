@@ -142,8 +142,9 @@ def split_sentences_by_seconds(sentences_metadata: dict, seconds: int) -> List[s
 
 def get_word_indices(full_text, target_text):
     # Clean and split texts
-    full_text = re.sub(r"\[\d*\]|\[|\]", "", full_text)
+    full_text = re.sub(r'\[\d+(\.\d+)?s\]|\[|\]', '', full_text)#re.sub(r"\[\d*\]|\[|\]", "", full_text)
     full_words = full_text.strip().split()
+    full_words = full_words[:-1]
     target_words = target_text.strip().split()
 
     if len(target_words) <= 2:
@@ -355,7 +356,7 @@ def format_word_with_silence(word_timings):
 
         # Add silence indicator if there's silence
         if silence > 0:
-            formatted_words.append(f"[{silence:.2f}] {word}")
+            formatted_words.append(f"[{silence:.2f}s] {word}")
         else:
             formatted_words.append(word)
             
@@ -387,7 +388,7 @@ def format_word_with_opening_paranthesis(word_timings, indices):
     """
     # Split into words while preserving punctuation
     for ind in indices:
-        word_timings[ind][0] = transform_text(word_timings[ind][0], "[")
+        word_timings[ind][0] = transform_text(word_timings[ind][0], "[", end=False)
     return word_timings
 
 def format_word_with_closing_paranthesis(word_timings, indices):
@@ -400,7 +401,7 @@ def format_word_with_closing_paranthesis(word_timings, indices):
     """
     # Split into words while preserving punctuation
     for ind in indices:
-        word_timings[ind][0] = transform_text(word_timings[ind][0], "]", end=True)
+        word_timings[ind][0] = transform_text(word_timings[ind][0], "]")
     return word_timings
 
 def new_sentence_from_words(words_data, sentence):

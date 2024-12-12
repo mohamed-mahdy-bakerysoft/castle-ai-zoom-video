@@ -196,21 +196,20 @@ def process_video(video_path: str, zoom_scales, processed_centers) -> str:
         status_text.text("Combining video with audio...")
 
         ffmpeg_command = [
-            "ffmpeg",
-            "-i",
-            temp_video,
-            "-i",
-            temp_audio,
-            "-c:v",
-            "libx264",
-            "-c:a",
-            "copy",
-            "-shortest",
-            "-movflags",
-            "+faststart",
-            "-y",
-            final_output,
-        ]
+                "ffmpeg",
+                "-i", temp_video,        # Input video
+                "-i", temp_audio,        # Input audio
+                "-c:v", "libx264",       # Video codec (H.264)
+                "-crf", "28",            # Increase CRF for lower quality and smaller size
+                "-b:v", "1000k",         # Set video bitrate (1 Mbps)
+                "-vf", "scale=640:360",  # Resize video to 640x360
+                "-c:a", "aac",           # Use AAC for audio
+                "-b:a", "128k",          # Set audio bitrate to 128 kbps
+                "-shortest",             # Use the shortest input stream (video or audio)
+                "-movflags", "+faststart",  # Enable fast start for streaming
+                "-y",                    # Overwrite output file if it exists
+                final_output
+            ]
         result = subprocess.run(
             ffmpeg_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )

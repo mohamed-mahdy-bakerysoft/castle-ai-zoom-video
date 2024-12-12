@@ -11,7 +11,7 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
-HEIGHT_PADDING = 0.2
+HEIGHT_PADDING = 0.4
 WIDTH_PADDING = 0.3
 
 

@@ -7,7 +7,7 @@ import streamlit as st
 
 
 logging.basicConfig(level=logging.INFO)
-HEIGHT_PADDING = 0.01
+HEIGHT_PADDING = 0.3
 WIDTH_PADDING = 0.3
 
 def process_scales_centers_after_extracting_boundaries(
@@ -29,7 +29,7 @@ def process_scales_centers_after_extracting_boundaries(
         start_frame = start_frame_init + int(effect.zoom_in_duration * fps)
         end_frame = min(total_frames, start_frame_init + int(effect.total_duration * fps))
         values = [(key, processed_scales[key]) for key in range(start_frame, end_frame)]
-        min_zoom_key, min_zoom_scale = min(values, key=lambda x: x[1])
+        min_zoom_key, min_zoom_scale = sorted(values, key=lambda x: x[1])[len(values) // 2]
         for frame_num in range(start_frame, end_frame):
             zoom_scales[frame_num] = min_zoom_scale
             processed_centers[frame_num] = processed_centers[min_zoom_key]
@@ -72,7 +72,7 @@ def process_zoom_scales_centers_after_extracting_boundaries(
     
     
     zoom_scales = get_initial_zoom_scales(total_frames, fps, zoom_effects)
-    output_queue = Queue(maxsize=total_frames)
+    output_queue = Queue(maxsize=total_frames * 2)
     frame_queue = Queue(maxsize=400)
     status_text = st.empty()
     progress_bar = st.progress(0)
@@ -92,8 +92,8 @@ def process_zoom_scales_centers_after_extracting_boundaries(
         frame_queue.put(None)
         # Wait for the processing to complete
         frame_queue.join()
-    
-    zoom_scales, processed_centers = process_scales_centers_after_extracting_boundaries(output_queue, zoom_scales, zoom_effects, total_frames, fps)
+    with st.spinner("Process scale centers after bounding box detection ..."):
+        zoom_scales, processed_centers = process_scales_centers_after_extracting_boundaries(output_queue, zoom_scales, zoom_effects, total_frames, fps)
     return zoom_scales, processed_centers
     
 

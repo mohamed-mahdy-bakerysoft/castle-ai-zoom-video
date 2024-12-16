@@ -4,6 +4,7 @@ import math
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
 import streamlit as st
+from statistics import mean
 
 
 logging.basicConfig(level=logging.INFO)
@@ -11,7 +12,12 @@ HEIGHT_PADDING = 0.3
 WIDTH_PADDING = 0.3
 
 def process_scales_centers_after_extracting_boundaries(
-    out_queue, zoom_scales, zoom_effects, total_frames, fps
+    out_queue, 
+    zoom_scales, 
+    zoom_effects, 
+    total_frames,
+    fps,
+    ease_name
 ):
 
     # Get the processed scales and centers
@@ -21,7 +27,14 @@ def process_scales_centers_after_extracting_boundaries(
         frame_count, processed_scale, center_x, center_y = out_queue.get()
         processed_scales[frame_count] = processed_scale
         processed_centers[frame_count] = (center_x, center_y)
-
+    not_none_processed_centers = [p for _, p in processed_centers.items() if p[0]!=None and p[1]!=None]
+    zoom_center = None
+    if len(not_none_processed_centers)/len(processed_centers) > 0.4:
+        first_items, second_items = zip(*not_none_processed_centers)
+        mean_first = mean(first_items)
+        mean_second = mean(second_items)
+        zoom_center = (mean_first, mean_second)
+        
     # get the minimum scale for holding in that position
     min_zoom_keys_per_effect = {}
     for i, effect in enumerate(zoom_effects):
@@ -29,10 +42,13 @@ def process_scales_centers_after_extracting_boundaries(
         start_frame = start_frame_init + int(effect.zoom_in_duration * fps)
         end_frame = min(total_frames, start_frame_init + int(effect.total_duration * fps))
         values = [(key, processed_scales[key]) for key in range(start_frame, end_frame)]
-        min_zoom_key, min_zoom_scale = sorted(values, key=lambda x: x[1])[len(values) // 2]
+        min_zoom_key, min_zoom_scale = sorted(values, key=lambda x: x[1])[0]#[len(values) // 2]
         for frame_num in range(start_frame, end_frame):
             zoom_scales[frame_num] = min_zoom_scale
-            processed_centers[frame_num] = processed_centers[min_zoom_key]
+            if zoom_center is not None:
+                processed_centers[frame_num] = processed_centers[min_zoom_key]
+            else:
+                processed_centers[frame_num] = processed_centers[zoom_center]
         min_zoom_keys_per_effect[i] = min_zoom_key
         effect.scale = min_zoom_scale
         
@@ -41,7 +57,7 @@ def process_scales_centers_after_extracting_boundaries(
         end_frame = start_frame + int(effect.zoom_in_duration * fps)#min(total_frames, start_frame + int(effect.zoom_in_duration * fps))
         for frame_num in range(start_frame, end_frame):
             current_time = frame_num / fps
-            zoom_scales[frame_num] = effect.get_scale_at_time_with_lag(current_time)
+            zoom_scales[frame_num] = effect.get_scale_at_time_with_lag(current_time, easing_function_name = ease_name)
             processed_centers[frame_num] = processed_centers[
                 min_zoom_keys_per_effect[i]
             ]
@@ -49,14 +65,14 @@ def process_scales_centers_after_extracting_boundaries(
     return zoom_scales, processed_centers
 
 
-def get_initial_zoom_scales(total_frames, fps, zoom_effects):
+def get_initial_zoom_scales(total_frames, fps, zoom_effects, ease_button_state):
     zoom_scales = [1.0] * total_frames
     for effect in zoom_effects:
         start_frame = int(effect.start_time * fps)
         end_frame = min(total_frames, start_frame + int(effect.total_duration * fps))
         for frame_num in range(start_frame, end_frame):
             current_time = frame_num / fps
-            zoom_scales[frame_num] = effect.get_scale_at_time_with_lag(current_time)
+            zoom_scales[frame_num] = effect.get_scale_at_time_with_lag(current_time, easing_function_name=ease_button_state)
 
     return zoom_scales
 
@@ -67,11 +83,12 @@ def process_zoom_scales_centers_after_extracting_boundaries(
    fps,
    height,
    width,
-   bounding_box_data
+   bounding_box_data,
+   ease_button_state
 ):
     
     
-    zoom_scales = get_initial_zoom_scales(total_frames, fps, zoom_effects)
+    zoom_scales = get_initial_zoom_scales(total_frames, fps, zoom_effects, ease_button_state)
     output_queue = Queue(maxsize=total_frames * 2)
     frame_queue = Queue(maxsize=400)
     status_text = st.empty()
@@ -93,7 +110,7 @@ def process_zoom_scales_centers_after_extracting_boundaries(
         # Wait for the processing to complete
         frame_queue.join()
     with st.spinner("Process scale centers after bounding box detection ..."):
-        zoom_scales, processed_centers = process_scales_centers_after_extracting_boundaries(output_queue, zoom_scales, zoom_effects, total_frames, fps)
+        zoom_scales, processed_centers = process_scales_centers_after_extracting_boundaries(output_queue, zoom_scales, zoom_effects, total_frames, fps, ease_button_state)
     return zoom_scales, processed_centers
     
 

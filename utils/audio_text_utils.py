@@ -10,6 +10,7 @@ from tqdm import tqdm
 from glob import glob
 from span_api_splitter.utils import get_split_info
 from span_api_splitter import config
+from concurrent.futures import ThreadPoolExecutor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,6 +19,122 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+def has_one_second_intersection(interval1, interval2):
+    # Unpack the tuples
+    start1, end1 = interval1
+    start2, end2 = interval2
+    
+    # Find intersection
+    intersection_start = max(start1, start2)
+    intersection_end = min(end1, end2)
+    
+    # Check if intersection is at least 1 second
+    return intersection_end - intersection_start >= 1
+
+def find_intersecting_intervals(broll_boundaries, other_times):
+    intersecting_times = []
+    
+    for time_interval in other_times:
+        # Check if this interval intersects with any broll
+        for broll in broll_boundaries:
+            if has_one_second_intersection(broll, time_interval):
+                intersecting_times.append(time_interval)
+                break  # Once we find one intersection, we can move to next interval
+                
+    return intersecting_times
+
+
+def construct_output_message(number_is_not_qualified,pred_length, duration, not_found_start, not_found_transition, shorts, intersected_indices):
+    messages = []
+    if number_is_not_qualified:
+        messages.append(
+            f"ERROR: Invalid number of zoom-in moments. Found {pred_length} zoom-ins but video duration requires exactly "
+            f"{int(duration)} zoom-ins. Please ensure there are approximately {int(duration)} zoom-ins, if possible, considering the B-roll segments"
+)
+    if shorts:
+        messages.append(
+            f"ERROR: Insufficient spacing for zoom-ins at indices {shorts}. The gap between zoom-in end and jump cut must "
+            f"be at least 3 seconds (considering zoom-in duration of 1 second). Please adjust these transitions to maintain "
+            f"proper timing and pacing."
+        )
+
+    if not_found_start:
+        messages.append(
+            f"ERROR: Invalid zoom-in phrases at indices {not_found_start}. The specified zoom-in phrases were not found in "
+            f"their respective sentences. Please verify that the zoom-in phrases exactly match the transcript text."
+        )
+        
+    if not_found_transition:
+        messages.append(
+            f"ERROR: Invalid transition points at indices {not_found_transition}. The specified transition phrases were not "
+            f"found in their respective sentences. Please ensure transition points exactly match the transcript text."
+        )
+    
+    if intersected_indices:
+         messages.append(
+            f"ERROR: B-roll conflicts detected at indices {intersected_indices}. Zoom-ins and transitions must not overlap "
+            f"with any B-roll segments. Please relocate these zoom-ins to non-B-roll portions of the video."
+        )
+    if messages:
+        messages.append("Do not apologize, just give me the correct version with the defined structure")
+    
+        return "\n\n".join(messages)
+    else:
+        return []
+     
+
+        
+def prediction_checks(preds, sntnces_splitted_by_duration, splitted_words, broll_boundaries, duration):
+    not_found_start = []
+    not_found_transition = []
+    shorts = []
+    predictions_times = []
+    broll_boundary_times = []
+    number_is_not_qualified = False
+    for i, pred in enumerate(preds):
+
+        prediction = pred.get(list(pred.keys())[0], [])
+        if len(prediction) < duration * 0.75:
+            number_is_not_qualified = True
+        else:
+            return []
+        broll_boundary_times.extend([(splitted_words[i][end_sent_idx][end_word_idx][2], splitted_words[i][st_sent_idx][st_word_idx][2]) for (st_sent_idx, st_word_idx, end_sent_idx, end_word_idx) in broll_boundaries])
+
+            
+        for j, p in enumerate(prediction):
+            sentence_num = p["sentence_number"]
+            text_applied = p["zoom_in_phrase"]
+            # reason = p['reason']
+            transition_sentence_num = p["transition_sentence_number"]
+            transition_sentence_word = p["transition_sentence_word"]
+
+            # zoom_out_duration = p['zoom_out_duration']
+            st_idx, end_idx = get_word_indices(
+                sntnces_splitted_by_duration[i][sentence_num], text_applied
+            )
+            st_idx_cut, end_idx_cut = get_word_indices(
+                sntnces_splitted_by_duration[i][transition_sentence_num],
+                transition_sentence_word,
+            )
+            # check for not found
+            
+            if st_idx == -1 or end_idx == -1:
+                not_found_start.append(j+1)
+            if st_idx_cut == -1 or end_idx_cut == -1:
+                not_found_transition.append(j + 1)
+            
+            
+            start_time = splitted_words[i][sentence_num][st_idx][1]
+            end_time = splitted_words[i][transition_sentence_num][st_idx_cut][1]
+            predictions_times.append((start_time, end_time))
+            if end_time - start_time < 4:
+                shorts.append(j + 1)
+    
+    
+             
+    intersected_indexes = find_intersecting_intervals(broll_boundary_times, predictions_times)
+    out_message = construct_output_message(number_is_not_qualified, len(prediction), duration, not_found_start, not_found_transition, shorts, intersected_indexes )
+    return out_message
 
 def split_words_by_duration(words: List, sentences_lengths: List):
     splitted_words = []
@@ -190,24 +307,179 @@ def add_silence_duration(word_data):
         start = w[2]
 
 
-def split_and_save_audio(audio_path, output_file_path_sentence, splitted_audio_dir):
-    sr = librosa.get_samplerate(audio_path)
+import torchaudio as ta
+import librosa
+import os
+from concurrent.futures import ThreadPoolExecutor
+from tqdm import tqdm
+import numpy as np
+from dataclasses import dataclass
+from typing import List, Tuple
+
+@dataclass
+class Segment:
+    start: float
+    end: float
+    index: int
+
+def parse_segments(output_file_path_sentence) -> List[Segment]:
+    """Parse and sort all segments from the file."""
+    segments = []
+    with open(output_file_path_sentence, "r") as file:
+        for i, line in enumerate(file):
+            line_stripped = line.strip()
+            start = float(line_stripped.split("|")[-2])
+            end = float(line_stripped.split("|")[-1])
+            segments.append(Segment(start, end, i))
+    
+    # Sort segments by start time for efficient processing
+    return sorted(segments, key=lambda x: x.start)
+
+def process_segment_chunk(args):
+    """Process a group of segments that can be loaded together."""
+    audio_path, segment_group, sr, splitted_audio_dir = args
+    
+    # Calculate the range needed for this group
+    start_time = segment_group[0].start
+    end_time = segment_group[-1].end
+    
+    # Load only the required portion of audio
+    frame_offset = int(start_time * sr)
+    num_frames = int((end_time - start_time) * sr)
+    
+    try:
+        audio_chunk, sr = ta.load(
+            audio_path,
+            frame_offset=frame_offset,
+            num_frames=num_frames
+        )
+        
+        # Process each segment in the loaded chunk
+        for segment in segment_group:
+            # Calculate relative positions within the loaded chunk
+            rel_start = int((segment.start - start_time) * sr)
+            rel_end = int((segment.end - start_time) * sr)
+            
+            # Extract and save segment
+            segment_audio = audio_chunk[:, rel_start:rel_end]
+            
+            # Create output filename
+            base_name = os.path.splitext(os.path.basename(audio_path))
+            output_filename = os.path.join(
+                splitted_audio_dir,
+                f"{base_name[0]}_{segment.index}{base_name[1]}"
+            )
+            
+            # Save with larger buffer for speed
+            ta.save(output_filename, segment_audio, sr, buffer_size=16384)
+            
+    except Exception as e:
+        print(f"Error processing segments from {start_time:.2f}s to {end_time:.2f}s: {str(e)}")
+
+def group_segments(segments: List[Segment], max_chunk_duration: float = 30.0) -> List[List[Segment]]:
+    """Group segments into chunks that can be processed together."""
+    groups = []
+    current_group = []
+    
+    for segment in segments:
+        if not current_group:
+            current_group.append(segment)
+        else:
+            # Check if adding this segment would exceed max chunk duration
+            if segment.end - current_group[0].start <= max_chunk_duration:
+                current_group.append(segment)
+            else:
+                groups.append(current_group)
+                current_group = [segment]
+    
+    if current_group:
+        groups.append(current_group)
+    
+    return groups
+
+def split_and_save_audio(audio_path: str, output_file_path_sentence: str, 
+                        splitted_audio_dir: str, max_workers: int = 10):
+    """
+    Memory-efficient audio splitting for long files.
+    """
+    if not os.path.exists(splitted_audio_dir):
+        os.makedirs(splitted_audio_dir)
+    
     if not os.listdir(splitted_audio_dir):
-        with open(output_file_path_sentence, "r") as file:
-            for i, line in enumerate(tqdm(file)):
-                line_stripped = line.strip()
-                start = float(line_stripped.split("|")[-2])
-                end = float(line_stripped.split("|")[-1])
-                y, sr = ta.load(
-                    audio_path,
-                    frame_offset=int(start * sr),
-                    num_frames=int((end - start) * sr),
-                )
-                ta.save(
-                    f"{splitted_audio_dir}/{audio_path.split('/')[-1].split('.')[0]}_{i}.{audio_path.split('/')[-1].split('.')[1]}",
-                    y,
-                    sr,
-                )
+        # Get sample rate once
+        sr = librosa.get_samplerate(audio_path)
+        
+        # Parse all segments
+        print("Parsing segments...")
+        segments = parse_segments(output_file_path_sentence)
+        
+        # Group segments for efficient processing
+        print("Grouping segments...")
+        segment_groups = group_segments(segments)
+        
+        # Prepare arguments for processing
+        args = [
+            (audio_path, group, sr, splitted_audio_dir)
+            for group in segment_groups
+        ]
+        
+        # Process groups in parallel
+        print(f"Processing {len(segment_groups)} chunks with {max_workers} workers...")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            list(tqdm(
+                executor.map(process_segment_chunk, args),
+                total=len(args),
+                desc="Processing audio chunks"
+            ))
+            
+        print("Audio splitting complete!")
+        
+    else:
+        print(f"Directory {splitted_audio_dir} is not empty. Skipping processing.")
+
+# def process_line(args):
+#     """Helper function to process a single line for splitting and saving."""
+#     audio_path, line, i, sr, splitted_audio_dir = args
+#     line_stripped = line.strip()
+#     start = float(line_stripped.split("|")[-2])
+#     end = float(line_stripped.split("|")[-1])
+#     y, sr = ta.load(
+#         audio_path,
+#         frame_offset=int(start * sr),
+#         num_frames=int((end - start) * sr),
+#     )
+#     output_filename = (
+#         f"{splitted_audio_dir}/{audio_path.split('/')[-1].split('.')[0]}_{i}."
+#         f"{audio_path.split('/')[-1].split('.')[1]}"
+#     )
+#     ta.save(output_filename, y, sr)
+
+# def split_and_save_audio(audio_path, output_file_path_sentence, splitted_audio_dir, max_workers=10):
+#     """
+#     Splits an audio file into segments defined in a sentence file and saves the segments.
+    
+#     Parameters:
+#     - audio_path: str, path to the audio file.
+#     - output_file_path_sentence: str, path to the file containing sentence information.
+#     - splitted_audio_dir: str, directory to save the split audio files.
+#     - max_workers: int, number of threads for parallel processing.
+#     """
+#     sr = librosa.get_samplerate(audio_path)
+    
+#     if not os.listdir(splitted_audio_dir):  # Process only if the directory is empty
+#         with open(output_file_path_sentence, "r") as file:
+#             lines = file.readlines()
+        
+#         # Prepare arguments for each line
+#         args = [
+#             (audio_path, line, i, sr, splitted_audio_dir)
+#             for i, line in enumerate(lines)
+#         ]
+
+#         # Parallel processing
+#         with ThreadPoolExecutor(max_workers=max_workers) as executor:
+#             list(tqdm(executor.map(process_line, args), total=len(args)))
+
 
 
 

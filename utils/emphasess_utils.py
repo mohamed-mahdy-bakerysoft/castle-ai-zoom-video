@@ -39,11 +39,11 @@ from emphassess.src.emphasis_classifier.utils.infer_utils import (
     infer_audio,
     Wav2Vec2ForAudioFrameClassification,
 )
+import torch
 
-def process_file(f, splitted_audio_txt_dir, model):
+def process_file(f, splitted_audio_txt_dir, model, device=None):
     # Get predictions and emphasis boundaries for the audio file
-    pred, emph_boundaries = infer_audio(f, model)
-
+    pred, emph_boundaries = infer_audio(f, model, device)
     print("Emphasis boundaries (in seconds): ", emph_boundaries)
     
     # Get the base name of the audio file
@@ -58,24 +58,33 @@ def process_file(f, splitted_audio_txt_dir, model):
         f"Emphasized intervals saved to {os.path.join(splitted_audio_txt_dir, output_filename)}"
     )
 
-def save_emphasis_predictions(files, splitted_audio_txt_dir):
+def save_emphasis_predictions(files, splitted_audio_txt_dir, device=None):
     if not os.path.exists(splitted_audio_txt_dir) or (
         os.path.exists(splitted_audio_txt_dir)
         and len(os.listdir(splitted_audio_txt_dir)) != len(files)
     ):
+        print(len(files))
+        
+        if device is None:
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
         # Load the model
         model = Wav2Vec2ForAudioFrameClassification.from_pretrained(
             "emphassess/src/emphasis_classifier/checkpoints/"
-        )
+        ).to(device)
 
         # Create output directory if it does not exist
         os.makedirs(splitted_audio_txt_dir, exist_ok=True)
+        
+        # for f in files:
+        #     process_file(f, splitted_audio_txt_dir, model, device)
 
         # Use ThreadPoolExecutor to process the files concurrently
-        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             # Submit tasks to the thread pool
             futures = [
-                executor.submit(process_file, f, splitted_audio_txt_dir, model) 
+                executor.submit(process_file, f, splitted_audio_txt_dir, model, device) 
                 for f in files
             ]
             

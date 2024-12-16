@@ -3,6 +3,7 @@ import anthropic
 import json
 
 
+
 class Predictor:
     def __init__(self, model_name, api_key):
         self.model_name = model_name
@@ -143,6 +144,7 @@ Example 2:
     }
   ]
 }"""
+
 #         self.system_prompt = """You are an intelligent assistant who helps to identify zoom-in moments in a video transcript.  
                 
 #                 You have the transcript in a specific format:  
@@ -240,8 +242,8 @@ class GPTAdapter(Predictor):
             api_key=api_key,
         )
         
-    def get_predictions(self, inputs, num_inputs=None):
-        
+    def get_predictions(self, inputs, num_inputs=None, prev_preds = None, out_message = None):
+        messages = []
         if num_inputs is None:
             num_inputs = len(inputs)
         predictions = []
@@ -249,9 +251,7 @@ class GPTAdapter(Predictor):
         for inp in inputs[:num_inputs]:
             preprocessed_input = self.preprocess_input(inp)
             prompt_ = self.prompt + "\n" + preprocessed_input
-            
-            chat_completion = self.client.chat.completions.create(
-                        messages=[
+            messages.extend([
                             {
                                 "role": "system",
                                 "content": self.system_prompt,
@@ -261,7 +261,21 @@ class GPTAdapter(Predictor):
                                 "content": prompt_
                                 
                             }
-                        ],
+                        ])
+            if prev_preds:
+              messages.append({
+                              "role": "assistant",
+                              "content":f"{prev_preds}"
+                          })
+            if out_message:
+              messages.append({
+                          "role": "user",
+                          "content": f"{out_message}"
+                      })
+            
+            
+            chat_completion = self.client.chat.completions.create(
+                        messages=messages,
                         model="gpt-4o",
                         response_format={'type': 'json_object'},
                         temperature=0.7,
@@ -287,26 +301,40 @@ class ClaudeAdapter(Predictor):
         json_end = response.rfind("}")
         return json.loads(response[json_start : json_end + 1])
 
-    def get_predictions(self, inputs, num_inputs=None):
+    def get_predictions(self, inputs, num_inputs=None, prev_preds = None, out_message = None):
         
+        messages = []
         if num_inputs is None:
             num_inputs = len(inputs)
         predictions = []
         
+        
         for inp in inputs[:num_inputs]:
-            preprocessed_input = self.preprocess_input(inp)
-            prompt_ = self.prompt + "\n" + preprocessed_input
-            message = self.client.messages.create(
-                model=self.model_name,
-                max_tokens=4000,
-                temperature=0.7,
-                top_p=0.9,
-                system=self.system_prompt,
-                messages=[
-                    {"role": "user", "content": [{"type": "text", "text": prompt_}]}
-                ],
-            )
-            out = self.extract_json(message.content[0].text)
-            predictions.append(out)
+            
+          preprocessed_input = self.preprocess_input(inp)
+          prompt_ = self.prompt + "\n" + preprocessed_input
+          messages.append({"role": "user", "content": [{"type": "text", "text": prompt_}]})
+          if prev_preds:
+            messages.append({
+                              "role": "assistant",
+                              "content":f"{prev_preds}"
+                          })
+          if out_message:
+            messages.append({
+                          "role": "user",
+                          "content": f"{out_message}"
+                      })
+            
+          message = self.client.messages.create(
+              model=self.model_name,
+              max_tokens=4000,
+              temperature=0.7,
+              top_p=0.9,
+              system=self.system_prompt,
+              messages=messages,
+          )
+
+          out = self.extract_json(message.content[0].text)
+          predictions.append(out)
 
         return predictions

@@ -11,7 +11,6 @@ import logging
 from utils.audio_text_utils import extract_audio
 logging.basicConfig(level=logging.INFO)
 
-
 class ZoomEffect:
     def __init__(
         self,
@@ -33,24 +32,54 @@ class ZoomEffect:
         self.scale = scale
         self.total_duration = zoom_in_duration + zoom_out_duration + self.lag_time
 
-    def get_scale_at_time(self, current_time: float) -> float:
+    def linear(self, t):
+        return t
+
+    def ease_in(self, t):
+        return t ** 2
+
+    def ease_out(self, t):
+        return 1 - (1 - t) ** 2
+
+    def ease_in_out(self, t):
+        return 3 * t**2 - 2 * t**3
+
+    def apply_easing(self, easing_function_name, progress):
+        # Map easing function names to instance methods
+        easing_functions = {
+            'linear': self.linear,
+            'ease_in': self.ease_in,
+            'ease_out': self.ease_out,
+            'ease_in_out': self.ease_in_out,
+        }
+        
+        easing_function = easing_functions.get(easing_function_name)
+        if easing_function is None:
+            raise ValueError(f"Easing function '{easing_function_name}' not found.")
+        return easing_function(progress)
+
+    def get_scale_at_time(self, current_time: float, easing_function_name='ease_in_out') -> float:
         time_in_effect = current_time - self.start_time
         if 0 <= time_in_effect <= self.zoom_in_duration:
             progress = time_in_effect / self.zoom_in_duration
-            return 1.0 + (self.scale - 1.0) * progress
+            eased_progress = self.apply_easing(easing_function_name, progress)
+            return 1.0 + (self.scale - 1.0) * eased_progress
         elif 0 <= time_in_effect - self.zoom_in_duration <= self.zoom_out_duration:
             time_in_zoom_out = time_in_effect - self.zoom_in_duration
             progress = time_in_zoom_out / self.zoom_out_duration
-            return self.scale - (self.scale - 1.0) * progress
+            eased_progress = self.apply_easing(easing_function_name, progress)
+            return self.scale - (self.scale - 1.0) * eased_progress
         return 1.0
 
-    def get_scale_at_time_with_lag(self, current_time: float, scale=None) -> float:
+    def get_scale_at_time_with_lag(self, current_time: float, scale=None, easing_function_name='ease_in_out') -> float:
         if scale is None:
             scale = self.scale
+
         time_in_effect = current_time - self.start_time
         if 0 <= time_in_effect <= self.zoom_in_duration:
             progress = time_in_effect / self.zoom_in_duration
-            return 1.0 + (scale - 1.0) * progress
+            eased_progress = self.apply_easing(easing_function_name, progress)
+            return 1.0 + (scale - 1.0) * eased_progress
         elif (
             self.zoom_in_duration
             <= time_in_effect
@@ -64,8 +93,10 @@ class ZoomEffect:
         ):
             time_in_zoom_out = time_in_effect - self.zoom_in_duration - self.lag_time
             progress = time_in_zoom_out / self.zoom_out_duration
-            return scale - (scale - 1.0) * progress
+            eased_progress = self.apply_easing(easing_function_name, progress)
+            return scale - (scale - 1.0) * eased_progress
         return 1.0
+
 
 
 def apply_zoom(

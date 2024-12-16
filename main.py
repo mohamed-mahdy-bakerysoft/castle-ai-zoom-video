@@ -9,6 +9,7 @@ from glob import glob
 import streamlit.components.v1 as components
 import base64
 import os
+import gc
 import hashlib
 from pathlib import Path
 from asr import get_client_settings, transcribe_audio
@@ -22,6 +23,7 @@ from utils.audio_text_utils import (
     split_and_save_audio,
     construct_new_sentences,
     add_sentences_to_file,
+    prediction_checks
 )
 from utils.emphasess_utils import save_emphasis_predictions
 import json
@@ -32,7 +34,8 @@ import warnings
 from utils.zoom_utils import process_zoom_scales_centers_after_extracting_boundaries
 from utils.scene_utils import read_scenes_with_seconds, find_broll_boundaries
 from face_bounding_box_detection import get_bounding_box_coordinates
-
+import time
+import threading
 
 _ = load_dotenv(find_dotenv())
 
@@ -43,6 +46,15 @@ warnings.filterwarnings("ignore")
 
 SPLIT_SENTENCE_BY_DURATION = 240 * 12
 ZOOM_DURATION = 0.7
+
+def cleanup_threads():
+    current_thread = threading.current_thread()
+    for thread in threading.enumerate():
+        if thread != current_thread and not thread.daemon:
+            try:
+                thread.join(timeout=1)
+            except TimeoutError:
+                pass
 
 
 # Set up logging configuration
@@ -251,15 +263,28 @@ def main():
         splitted_audio_dir = f"./uploaded_files/recordings/splitted_audios/{video_path.split('/')[-1].split('.')[0]}"
         os.makedirs(splitted_audio_dir, exist_ok=True)
 
-        split_and_save_audio(
-            st.session_state.audio_file, output_file_path_sentence, splitted_audio_dir
-        )
+        with st.spinner("Split and save the audio..."):
+            split_and_save_audio(
+                st.session_state.audio_file, output_file_path_sentence, splitted_audio_dir
+            )
+        # cleanup_threads() 
+        
+        # gc.collect()  # Force garbage collection
+
+        # # Give system a moment to fully release resources
+        # time.sleep(1)
         # Run emphasis model and change the sentence txt file
         files = glob(f"{splitted_audio_dir}/*.mp3")
         splitted_audio_txt_dir = f"./uploaded_files/emphasis_detection/{video_path.split('/')[-1].split('.')[0]}"
         
         with st.spinner("Detection of emphasized phrases..."):
             save_emphasis_predictions(files, splitted_audio_txt_dir)
+        
+        # cleanup_threads() 
+        # gc.collect()  # Force garbage collection
+
+        # Give system a moment to fully release resources
+        # time.sleep(1)
         
         audio_basename = os.path.basename(st.session_state.audio_file)
         # add silence duration to the words
@@ -280,6 +305,12 @@ def main():
             if not os.path.exists(scenes_splitted_video_path + f'{video_path.split("/")[-1].split(".")[0]}-Scenes.csv'):
                 os.system(f"python -m scenedetect -i {video_path} detect-content list-scenes -o {scenes_splitted_video_path} split-video -o {scenes_splitted_video_path}")
 
+        # cleanup_threads() 
+        # gc.collect()  # Force garbage collection
+
+        # Give system a moment to fully release resources
+        # time.sleep(1)
+        
         bounding_boxes_path =  './uploaded_files/recordings/face_detected_bounding_boxes/'
         os.makedirs(bounding_boxes_path, exist_ok=True)
         if os.path.exists(f'{bounding_boxes_path}/{video_path.split("/")[-1].split(".")[0]}.json'):
@@ -297,7 +328,7 @@ def main():
                         json.dump(json_compatible_bounding_box_data, json_file, indent=4)
 
         scene_path_json = f"./uploaded_files/recordings/scene_splitted_videos/{video_path.split('/')[-1].split('.')[0]}.json"
-        if not os.path.exists( scene_path_json):
+        if not os.path.exists(scene_path_json):
             scenes_data = read_scenes_with_seconds(scenes_splitted_video_path + f'{video_path.split("/")[-1].split(".")[0]}-Scenes.csv')
             os.makedirs(os.path.dirname(scene_path_json), exist_ok=True)
             with open(scene_path_json, "w+") as f:
@@ -311,11 +342,13 @@ def main():
             start_frame = int(scene['start_time'] * st.session_state.fps)
             end_frame = int(scene['end_time'] * st.session_state.fps)
             for frame_num in range(start_frame, end_frame):
+                if frame_num not in bounding_box_coordinates.keys():
+                    bounding_box_coordinates[frame_num] = None
                 if bounding_box_coordinates[frame_num] is not None:
                     scene_count_detected += 1
             if end_frame - start_frame == 0:
                 scenes_data[i]['Broll'] = False
-            if scene_count_detected/(end_frame - start_frame) > 0.7:
+            elif scene_count_detected/(end_frame - start_frame) > 0.7:
                 scenes_data[i]['Broll'] = False
             else:
                 scenes_data[i]['Broll']= True
@@ -385,6 +418,21 @@ def main():
                 if not os.path.exists(json_file_path):
                     # Generate predictions using GPT predictor
                     st.session_state.predictions = predictor.get_predictions(splitted_sentences)
+                    
+                    out_message = prediction_checks(st.session_state.predictions,
+                                          st.session_state.sentences_splitted_by_duration, 
+                                          st.session_state.splitted_words,
+                                          broll_boundaries,
+                                          int(st.session_state.total_frames/st.session_state.fps/60)
+                                          )
+                    if out_message:
+                        st.session_state.predictions = predictor.get_predictions(
+                        splitted_sentences,
+                        num_inputs=len(splitted_sentences),
+                        prev_preds=st.session_state.predictions, 
+                        out_message = out_message
+                            )
+                            
                     # Save predictions to a JSON file
                     with open(json_file_path, "w") as f:
                         json.dump(st.session_state.predictions, f)
@@ -393,7 +441,23 @@ def main():
                     # Load existing predictions
                     with open(json_file_path, "r") as f:
                         st.session_state.predictions = json.load(f)
+                    out_message = prediction_checks(st.session_state.predictions,
+                                          st.session_state.sentences_splitted_by_duration, 
+                                          st.session_state.splitted_words, 
+                                          broll_boundaries,
+                                          int(st.session_state.total_frames/st.session_state.fps/60)
+                                          )
                     st.info(f"Loaded existing predictions from {json_file_path}")
+                    if out_message:
+                        st.session_state.predictions = predictor.get_predictions(
+                                                        splitted_sentences,
+                                                        num_inputs=len(splitted_sentences), 
+                                                        prev_preds=st.session_state.predictions,
+                                                        out_message = out_message
+                            )
+                        with open(json_file_path, "w") as f:
+                            json.dump(st.session_state.predictions, f)
+                    
 
         
         # st.write(st.session_state)
@@ -438,6 +502,20 @@ def main():
                         st.session_state.predictions = predictor.get_predictions(
                             splitted_sentences, num_inputs=len(splitted_sentences)
                         )
+                        out_message = prediction_checks(st.session_state.predictions,
+                                          st.session_state.sentences_splitted_by_duration, 
+                                          st.session_state.splitted_words,
+                                          broll_boundaries,
+                                          int(st.session_state.total_frames/st.session_state.fps/60)
+                                          )
+                        if out_message:
+                            st.session_state.predictions = predictor.get_predictions(
+                            splitted_sentences,
+                            num_inputs=len(splitted_sentences),
+                            prev_preds=st.session_state.predictions, 
+                            out_message = out_message
+                                )
+                            
                         with open(json_file_path, "w") as f:
                             json.dump(st.session_state.predictions, f)
                     st.success(f"Predictions saved to {json_file_path}")
@@ -445,6 +523,22 @@ def main():
                     with open(json_file_path, "r") as f:
                         st.session_state.predictions = json.load(f)
                     st.info(f"Loaded existing predictions from {json_file_path}")
+                    
+                    out_message = prediction_checks(st.session_state.predictions,
+                                          st.session_state.sentences_splitted_by_duration, 
+                                          st.session_state.splitted_words, 
+                                          broll_boundaries,
+                                          int(st.session_state.total_frames/st.session_state.fps/60)
+                                          )
+                    if out_message:
+                        st.session_state.predictions = predictor.get_predictions(
+                                                        splitted_sentences,
+                                                        num_inputs=len(splitted_sentences), 
+                                                        prev_preds=st.session_state.predictions,
+                                                        out_message = out_message
+                            )
+                        with open(json_file_path, "w") as f:
+                            json.dump(st.session_state.predictions, f)
             # st.session_state.predictions = predictions
 
         if st.session_state.predictions:
@@ -457,7 +551,7 @@ def main():
             with col1:
                 if st.button("Fast Zoom In-Hold-Cut"):
                     st.session_state.button_clicked = "fast_zoom_hold_cut"
-
+                    
         # Handle the action after the button click
         # if st.session_state.button_clicked == "fast_zoom_cut":
         #     st.write("Slow Zoom In-Cut clicked!")
@@ -471,51 +565,71 @@ def main():
         #         st.error(f"An error occurred during processing: {str(e)}")
         if st.session_state.button_clicked == "fast_zoom_hold_cut":
             st.write("Fast Zoom In-Hold-Cut clicked!")
-            try:
-                with st.spinner("Getting zooms from  claude..."):
-                    zoom_effects = get_zooms_claude(
-                        st.session_state.predictions,
-                        st.session_state.sentences_splitted_by_duration,
-                        st.session_state.splitted_words,
-                        zoom_in_duration=ZOOM_DURATION,
-                        slow=False,
-                        jumpcut=True,
-                        hold=True,
-                    )
-                    st.session_state.zoom_in_times = []
-                    for effect in zoom_effects:
-                        st.session_state.zoom_in_times.append(
-                            f"{int(effect.start_time//60)}m{int(effect.start_time%60)}s"
-                        )
             
-                
-                with st.spinner("Process zooms after face detection ..."):
-                    zoom_scales, processed_centers = process_zoom_scales_centers_after_extracting_boundaries(
-                        zoom_effects,
-                        st.session_state.total_frames,
-                        st.session_state.fps,
-                        st.session_state.height,
-                        st.session_state.width,
-                        bounding_box_coordinates
-                    )
-                with st.spinner("Process video..."):
-                    st.session_state.output_path = process_video(
-                        video_path, zoom_scales, processed_centers
-                    )
-                    st.session_state.button_clicked = None
+            # Initialize button_clicked_ease in session state if it doesn't exist
+            if 'button_clicked_ease' not in st.session_state:
+                st.session_state.button_clicked_ease = "linear"
+            
+            # Create columns for easing function buttons
+            [linear_, ease_in_, ease_out_, ease_in_out_] = st.columns(4)
+            
+            # Easing function buttons
+            with linear_:
+                if st.button("Linear", key="linear_btn"):
+                    st.session_state.button_clicked_ease = "linear"
+            with ease_in_:
+                if st.button("Ease In", key="ease_in_btn"):
+                    st.session_state.button_clicked_ease = "ease_in"
+            with ease_out_:
+                if st.button("Ease Out", key="ease_out_btn"):
+                    st.session_state.button_clicked_ease = "ease_out"
+            with ease_in_out_:
+                if st.button("Ease In-Out", key="ease_in_out_btn"):
+                    st.session_state.button_clicked_ease = "ease_in_out"
+            
+            # Display currently selected easing function
+            st.write(f"Selected easing function: {st.session_state.button_clicked_ease}")
+            
+            # Process button to start video processing
+            if st.button("Process Video", key="process_video_btn"):
+                try:
+                    with st.spinner("Getting zooms from claude..."):
+                        zoom_effects = get_zooms_claude(
+                            st.session_state.predictions,
+                            st.session_state.sentences_splitted_by_duration,
+                            st.session_state.splitted_words,
+                            zoom_in_duration=ZOOM_DURATION,
+                            slow=False,
+                            jumpcut=True,
+                            hold=True,
+                        )
+                        st.session_state.zoom_in_times = []
+                        for effect in zoom_effects:
+                            st.session_state.zoom_in_times.append(
+                                f"{int(effect.start_time//60)}m{int(effect.start_time%60)}s"
+                            )
                     
-            except Exception as e:
-                st.error(f"An error occurred during processing: {str(e)}")
+                    with st.spinner("Process zooms after face detection ..."):
+                        zoom_scales, processed_centers = process_zoom_scales_centers_after_extracting_boundaries(
+                            zoom_effects,
+                            st.session_state.total_frames,
+                            st.session_state.fps,
+                            st.session_state.height,
+                            st.session_state.width,
+                            bounding_box_coordinates,
+                            st.session_state.button_clicked_ease
+                        )
+                    
+                    with st.spinner("Process video..."):
+                        st.session_state.output_path = process_video(
+                            video_path, zoom_scales, processed_centers
+                        )
+                            
+                except Exception as e:
+                    st.error(f"An error occurred during processing: {str(e)}")
+            
 
-
-        if st.session_state.zoom_effects:
-            zoom_in_times = []
-            for effect in st.session_state.zoom_effects:
-                zoom_in_times.append(
-                    f"{int(effect.start_time//60)}m{int(effect.start_time%60)}s"
-                )
-
-                
+        
         if st.session_state.zoom_effects:
             zoom_in_times = []
             for effect in st.session_state.zoom_effects:

@@ -684,36 +684,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
-# selected_time = st.selectbox(
-#                 "Select a Zoom-in Start Time (or leave empty to play as it is):",
-#                 options=["Play as it is"] + ["0m17s"],
-#             )
-
-# selected_seconds = None
-# if selected_time != "Play as it is":
-#     minutes, seconds = map(int, selected_time[:-1].split("m"))
-#     selected_seconds = minutes * 60 + seconds
-
-# video_path = f"temp_output/output_pod_vid_0.mp4"
-#         # Create custom HTML component with seek functionality
-# video_file = open(video_path, "rb").read()
-# video_b64 = base64.b64encode(video_file).decode('utf-8')  # Convert to base64
-
-# html_code = f"""
-#     <div style="width: 100%; height: 100%;">
-#         <video id="videoPlayer" width="100%" height="100%" controls>
-#             <source src="data:video/mp4;base64,{video_b64}" type="video/mp4">
-#             Your browser does not support the video tag.
-#         </video>
-#         <script>
-#             var video = document.getElementById('videoPlayer');
-#             video.addEventListener('loadedmetadata', function() {{
-#                 console.log('Video metadata loaded');
-#                 video.currentTime = {selected_seconds};  // Set start time
-#                 console.log('Starting video at:', {selected_seconds});
-#             }});
-#         </script>
-#     </div>
-# """
-# components.html(html_code, height=400)

@@ -24,10 +24,10 @@ def process_file(f, splitted_audio_txt_dir, model, device=None):
     )
 
 def save_emphasis_predictions(files, splitted_audio_txt_dir, device=None):
-    if not os.path.exists(splitted_audio_txt_dir) or (
-        os.path.exists(splitted_audio_txt_dir)
-        and len(os.listdir(splitted_audio_txt_dir)) != len(files)
-    ):
+    if not os.path.exists(splitted_audio_txt_dir):
+    # or (
+    #     os.path.exists(splitted_audio_txt_dir)
+    #     and len(os.listdir(splitted_audio_txt_dir)) != len(files):
         print(len(files))
         
         if device is None:

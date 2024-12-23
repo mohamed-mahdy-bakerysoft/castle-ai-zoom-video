@@ -44,7 +44,7 @@ _ = load_dotenv(find_dotenv())
 st.set_option("deprecation.showfileUploaderEncoding", False)
 warnings.filterwarnings("ignore")
 
-SPLIT_SENTENCE_BY_DURATION = 240 * 12
+SPLIT_SENTENCE_BY_DURATION = 120  * 5
 ZOOM_DURATION = 0.7
 
 def cleanup_threads():
@@ -419,19 +419,21 @@ def main():
                     # Generate predictions using GPT predictor
                     st.session_state.predictions = predictor.get_predictions(splitted_sentences)
                     
-                    out_message = prediction_checks(st.session_state.predictions,
-                                          st.session_state.sentences_splitted_by_duration, 
-                                          st.session_state.splitted_words,
-                                          broll_boundaries,
-                                          int(st.session_state.total_frames/st.session_state.fps/60)
-                                          )
-                    if out_message:
-                        st.session_state.predictions = predictor.get_predictions(
-                        splitted_sentences,
-                        num_inputs=len(splitted_sentences),
-                        prev_preds=st.session_state.predictions, 
-                        out_message = out_message
-                            )
+                    # out_message = prediction_checks(st.session_state.predictions,
+                    #                       st.session_state.sentences_splitted_by_duration, 
+                    #                       st.session_state.splitted_words,
+                    #                       broll_boundaries,
+                    #                       int(st.session_state.total_frames/st.session_state.fps/60),
+                    #                       word_data
+                    #                       )
+                    # if out_message:
+                    #     st.write(out_message)
+                    #     st.session_state.predictions = predictor.get_predictions(
+                    #     splitted_sentences,
+                    #     num_inputs=len(splitted_sentences),
+                    #     prev_preds=st.session_state.predictions, 
+                    #     out_message = out_message
+                    #         )
                             
                     # Save predictions to a JSON file
                     with open(json_file_path, "w") as f:
@@ -441,22 +443,24 @@ def main():
                     # Load existing predictions
                     with open(json_file_path, "r") as f:
                         st.session_state.predictions = json.load(f)
-                    out_message = prediction_checks(st.session_state.predictions,
-                                          st.session_state.sentences_splitted_by_duration, 
-                                          st.session_state.splitted_words, 
-                                          broll_boundaries,
-                                          int(st.session_state.total_frames/st.session_state.fps/60)
-                                          )
-                    st.info(f"Loaded existing predictions from {json_file_path}")
-                    if out_message:
-                        st.session_state.predictions = predictor.get_predictions(
-                                                        splitted_sentences,
-                                                        num_inputs=len(splitted_sentences), 
-                                                        prev_preds=st.session_state.predictions,
-                                                        out_message = out_message
-                            )
-                        with open(json_file_path, "w") as f:
-                            json.dump(st.session_state.predictions, f)
+                    # out_message = prediction_checks(st.session_state.predictions,
+                    #                       st.session_state.sentences_splitted_by_duration, 
+                    #                       st.session_state.splitted_words, 
+                    #                       broll_boundaries,
+                    #                       int(st.session_state.total_frames/st.session_state.fps/60),
+                    #                       word_data
+                    #                       )
+                    # st.info(f"Loaded existing predictions from {json_file_path}")
+                    # if out_message:
+                    #     st.write(out_message)
+                        # st.session_state.predictions = predictor.get_predictions(
+                        #                                 splitted_sentences,
+                        #                                 num_inputs=len(splitted_sentences), 
+                        #                                 prev_preds=st.session_state.predictions,
+                        #                                 out_message = out_message
+                        #     )
+                    #     with open(json_file_path, "w") as f:
+                    #         json.dump(st.session_state.predictions, f)
                     
 
         
@@ -506,15 +510,17 @@ def main():
                                           st.session_state.sentences_splitted_by_duration, 
                                           st.session_state.splitted_words,
                                           broll_boundaries,
-                                          int(st.session_state.total_frames/st.session_state.fps/60)
+                                          int(st.session_state.total_frames/st.session_state.fps/60),
+                                          word_data
                                           )
-                        if out_message:
-                            st.session_state.predictions = predictor.get_predictions(
-                            splitted_sentences,
-                            num_inputs=len(splitted_sentences),
-                            prev_preds=st.session_state.predictions, 
-                            out_message = out_message
-                                )
+                        # if out_message:
+                        #     st.write(out_message)
+                        #     st.session_state.predictions = predictor.get_predictions(
+                        #     splitted_sentences,
+                        #     num_inputs=len(splitted_sentences),
+                        #     prev_preds=st.session_state.predictions, 
+                        #     out_message = out_message
+                        #         )
                             
                         with open(json_file_path, "w") as f:
                             json.dump(st.session_state.predictions, f)
@@ -524,21 +530,23 @@ def main():
                         st.session_state.predictions = json.load(f)
                     st.info(f"Loaded existing predictions from {json_file_path}")
                     
-                    out_message = prediction_checks(st.session_state.predictions,
-                                          st.session_state.sentences_splitted_by_duration, 
-                                          st.session_state.splitted_words, 
-                                          broll_boundaries,
-                                          int(st.session_state.total_frames/st.session_state.fps/60)
-                                          )
-                    if out_message:
-                        st.session_state.predictions = predictor.get_predictions(
-                                                        splitted_sentences,
-                                                        num_inputs=len(splitted_sentences), 
-                                                        prev_preds=st.session_state.predictions,
-                                                        out_message = out_message
-                            )
-                        with open(json_file_path, "w") as f:
-                            json.dump(st.session_state.predictions, f)
+                    # out_message = prediction_checks(st.session_state.predictions,
+                    #                       st.session_state.sentences_splitted_by_duration, 
+                    #                       st.session_state.splitted_words, 
+                    #                       broll_boundaries,
+                    #                       int(st.session_state.total_frames/st.session_state.fps/60),
+                    #                       word_data
+                    #                       )
+                    # if out_message:
+                    #     st.write(out_message)
+                    #     st.session_state.predictions = predictor.get_predictions(
+                    #                                     splitted_sentences,
+                    #                                     num_inputs=len(splitted_sentences), 
+                    #                                     prev_preds=st.session_state.predictions,
+                    #                                     out_message = out_message
+                    #         )
+                    #     with open(json_file_path, "w") as f:
+                    #         json.dump(st.session_state.predictions, f)
             # st.session_state.predictions = predictions
 
         if st.session_state.predictions:

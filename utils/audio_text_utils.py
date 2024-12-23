@@ -46,11 +46,11 @@ def find_intersecting_intervals(broll_boundaries, other_times):
 
 def construct_output_message(number_is_not_qualified,pred_length, duration, not_found_start, not_found_transition, shorts, intersected_indices):
     messages = []
-    if number_is_not_qualified:
-        messages.append(
-            f"ERROR: Invalid number of zoom-in moments. Found {pred_length} zoom-ins but video duration requires exactly "
-            f"{int(duration)} zoom-ins. Please ensure there are approximately {int(duration)} zoom-ins, if possible, considering the B-roll segments"
-)
+#     if number_is_not_qualified:
+#         messages.append(
+#             f"ERROR: Invalid number of zoom-in moments. Found {pred_length} zoom-ins but video duration requires exactly "
+#             f"{int(duration)} zoom-ins. Please ensure there are approximately {int(duration)} zoom-ins, if possible, considering the B-roll segments"
+# )
     if shorts:
         messages.append(
             f"ERROR: Insufficient spacing for zoom-ins at indices {shorts}. The gap between zoom-in end and jump cut must "
@@ -84,7 +84,7 @@ def construct_output_message(number_is_not_qualified,pred_length, duration, not_
      
 
         
-def prediction_checks(preds, sntnces_splitted_by_duration, splitted_words, broll_boundaries, duration):
+def prediction_checks(preds, sntnces_splitted_by_duration, splitted_words, broll_boundaries, duration, word_data):
     not_found_start = []
     not_found_transition = []
     shorts = []
@@ -98,7 +98,7 @@ def prediction_checks(preds, sntnces_splitted_by_duration, splitted_words, broll
             number_is_not_qualified = True
         else:
             return []
-        broll_boundary_times.extend([(splitted_words[i][end_sent_idx][end_word_idx][2], splitted_words[i][st_sent_idx][st_word_idx][2]) for (st_sent_idx, st_word_idx, end_sent_idx, end_word_idx) in broll_boundaries])
+        broll_boundary_times.extend([(word_data[end_sent_idx][end_word_idx][2], word_data[st_sent_idx][st_word_idx][2]) for (st_sent_idx, st_word_idx, end_sent_idx, end_word_idx) in broll_boundaries])
 
             
         for j, p in enumerate(prediction):
@@ -117,20 +117,17 @@ def prediction_checks(preds, sntnces_splitted_by_duration, splitted_words, broll
                 transition_sentence_word,
             )
             # check for not found
-            
             if st_idx == -1 or end_idx == -1:
-                not_found_start.append(j+1)
+                not_found_start.append((i+1, j+1))
             if st_idx_cut == -1 or end_idx_cut == -1:
-                not_found_transition.append(j + 1)
+                not_found_transition.append((i + 1, j + 1))
             
             
             start_time = splitted_words[i][sentence_num][st_idx][1]
             end_time = splitted_words[i][transition_sentence_num][st_idx_cut][1]
             predictions_times.append((start_time, end_time))
             if end_time - start_time < 4:
-                shorts.append(j + 1)
-    
-    
+                shorts.append((i+1, j + 1))
              
     intersected_indexes = find_intersecting_intervals(broll_boundary_times, predictions_times)
     out_message = construct_output_message(number_is_not_qualified, len(prediction), duration, not_found_start, not_found_transition, shorts, intersected_indexes )
@@ -259,7 +256,7 @@ def split_sentences_by_seconds(sentences_metadata: dict, seconds: int) -> List[s
 
 def get_word_indices(full_text, target_text):
     # Clean and split texts
-    full_text = re.sub(r'\[\d+(\.\d+)?s\]|\[|\]', '', full_text)#re.sub(r"\[\d*\]|\[|\]", "", full_text)
+    full_text = re.sub(r'\[\d+(\.\d+)?s\]|\[|\]|#', '', full_text)
     full_words = full_text.strip().split()
     full_words = full_words[:-1]
     target_words = target_text.strip().split()
@@ -529,17 +526,38 @@ def construct_new_sentences(
         for j, wrd_info in enumerate(word_data[i]):
             wrd_info[0] = fomatted_words[j]
         
-        if i in start_sent_indexes:
-            word_indices_start = [broll[1] for broll in broll_boundaries if broll[0] == i]
-            word_data[i] = format_word_with_opening_paranthesis(word_data[i], word_indices_start)
-        if i in end_sentence_indexes:
-            word_indices_end = [broll[3] for broll in broll_boundaries if broll[2] == i]
-            word_data[i] = format_word_with_closing_paranthesis(word_data[i], word_indices_end)
+        # if i in start_sent_indexes:
+        #     word_indices_start = [broll[1] for broll in broll_boundaries if broll[0] == i]
+        #     word_data[i] = format_word_with_opening_paranthesis(word_data[i], word_indices_start)
+        # if i in end_sentence_indexes:
+        #     word_indices_end = [broll[3] for broll in broll_boundaries if broll[2] == i]
+        #     word_data[i] = format_word_with_closing_paranthesis(word_data[i], word_indices_end)
         
+        
+    
+    for broll_boundary in broll_boundaries:
+        start_sent_idx, start_word_index, end_sent_idx, end_word_index = broll_boundary
+        
+        if end_sent_idx - start_sent_idx > 0:
+            for sent in range(start_sent_idx, end_sent_idx + 1):
+                if sent == start_sent_idx:
+                    word_data[start_sent_idx] = format_word_with_opening_vandakanish(word_data[start_sent_idx], [start_word_index])
+                    word_data[start_sent_idx] = format_word_with_closing_vandakanish(word_data[start_sent_idx], [len(word_data[start_sent_idx])-1])
+                elif sent == end_sent_idx:
+                    word_data[sent] = format_word_with_opening_vandakanish(word_data[sent], [0])
+                    word_data[sent] = format_word_with_closing_vandakanish(word_data[sent], [end_word_index])
+                else:
+                    word_data[sent] = format_word_with_opening_vandakanish(word_data[sent], [0])
+                    word_data[sent] = format_word_with_closing_vandakanish(word_data[sent], [len(word_data[sent])-1])
+        else:
+            word_data[start_sent_idx] = format_word_with_opening_vandakanish(word_data[start_sent_idx], [start_word_index])
+            word_data[end_sent_idx] = format_word_with_closing_vandakanish(word_data[end_sent_idx], [end_word_index])
+
+    for i, f in tqdm(enumerate(emphasized_files)):
         new_s = new_sentence_from_words([word[0] for word in word_data[i]], sentences[i])
         add_sentences_to_file(new_s, sentence_info_path_updated)
         new_sentences.append(new_s + "\n")
-
+    
     return new_sentences
 
 
@@ -650,7 +668,7 @@ def transform_text(input_str, sign, end=True):
             return f"{sign}{input_str}"
 
 
-def format_word_with_opening_paranthesis(word_timings, indices):
+def format_word_with_opening_vandakanish(word_timings, indices):
     """
     Format a sentence with silence indicators based on word timings.
 
@@ -660,10 +678,10 @@ def format_word_with_opening_paranthesis(word_timings, indices):
     """
     # Split into words while preserving punctuation
     for ind in indices:
-        word_timings[ind][0] = transform_text(word_timings[ind][0], "[", end=False)
+        word_timings[ind][0] = transform_text(word_timings[ind][0], "#", end=False)
     return word_timings
 
-def format_word_with_closing_paranthesis(word_timings, indices):
+def format_word_with_closing_vandakanish(word_timings, indices):
     """
     Format a sentence with closing paranthesis based on word timings.
 
@@ -673,7 +691,7 @@ def format_word_with_closing_paranthesis(word_timings, indices):
     """
     # Split into words while preserving punctuation
     for ind in indices:
-        word_timings[ind][0] = transform_text(word_timings[ind][0], "]")
+        word_timings[ind][0] = transform_text(word_timings[ind][0], "#")
     return word_timings
 
 def new_sentence_from_words(words_data, sentence):
